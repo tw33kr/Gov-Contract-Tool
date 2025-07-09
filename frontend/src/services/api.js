@@ -1,0 +1,156 @@
+// frontend/src/services/api.js
+import axios from 'axios';
+
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+
+const api = axios.create({
+  baseURL: API_BASE_URL,
+  timeout: 30000,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+// Request interceptor
+api.interceptors.request.use(
+  (config) => {
+    console.log(`Making ${config.method?.toUpperCase()} request to ${config.url}`);
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
+
+// Response interceptor
+api.interceptors.response.use(
+  (response) => {
+    return response.data;
+  },
+  (error) => {
+    console.error('API Error:', error.response?.data || error.message);
+    
+    if (error.response?.status === 400 && error.response?.data?.detail?.includes('API key is required')) {
+      throw new Error('SAM.gov API key is required. Get your free API key at https://sam.gov/data-services and set the SAM_GOV_API_KEY environment variable.');
+    } else if (error.response?.status === 404) {
+      throw new Error('Resource not found');
+    } else if (error.response?.status === 500) {
+      throw new Error('Internal server error. Please try again later.');
+    } else if (error.code === 'ECONNREFUSED') {
+      throw new Error('Unable to connect to the server. Please ensure the backend is running.');
+    } else {
+      throw new Error(error.response?.data?.detail || error.message || 'An unexpected error occurred');
+    }
+  }
+);
+
+// Contract search
+export const searchContracts = async (params = {}) => {
+  try {
+    const queryParams = new URLSearchParams();
+    
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== null && value !== undefined && value !== '') {
+        queryParams.append(key, value);
+      }
+    });
+    
+    const response = await api.get(`/api/contracts/search?${queryParams}`);
+    return response;
+  } catch (error) {
+    console.error('Error searching contracts:', error);
+    throw error;
+  }
+};
+
+// Contract awards search
+export const searchAwards = async (params = {}) => {
+  try {
+    const queryParams = new URLSearchParams();
+    
+    // Always include awards in the search
+    const searchParams = { ...params, include_awards: true };
+    
+    Object.entries(searchParams).forEach(([key, value]) => {
+      if (value !== null && value !== undefined && value !== '') {
+        queryParams.append(key, value);
+      }
+    });
+    
+    const response = await api.get(`/api/contracts/search?${queryParams}`);
+    return response;
+  } catch (error) {
+    console.error('Error searching awards:', error);
+    throw error;
+  }
+};
+
+// Get awards analytics
+export const getAwardsAnalytics = async () => {
+  try {
+    const response = await api.get('/api/analytics/summary?include_awards=true');
+    return response;
+  } catch (error) {
+    console.error('Error getting awards analytics:', error);
+    throw error;
+  }
+};
+
+// Get contract details
+export const getContractDetails = async (noticeId) => {
+  try {
+    const response = await api.get(`/api/contracts/${noticeId}`);
+    return response;
+  } catch (error) {
+    console.error('Error getting contract details:', error);
+    throw error;
+  }
+};
+
+// Get analytics
+export const getAnalytics = async () => {
+  try {
+    const response = await api.get('/api/analytics/summary');
+    return response;
+  } catch (error) {
+    console.error('Error getting analytics:', error);
+    throw error;
+  }
+};
+
+// Get agencies list
+export const getAgencies = async () => {
+  try {
+    const response = await api.get('/api/agencies');
+    return response;
+  } catch (error) {
+    console.error('Error getting agencies:', error);
+    // Return empty list if error
+    return { agencies: [] };
+  }
+};
+
+// Get set-asides list
+export const getSetAsides = async () => {
+  try {
+    const response = await api.get('/api/set-asides');
+    return response;
+  } catch (error) {
+    console.error('Error getting set-asides:', error);
+    // Return empty list if error
+    return { set_asides: [] };
+  }
+};
+
+// Health check
+export const healthCheck = async () => {
+  try {
+    const response = await api.get('/health');
+    return response;
+  } catch (error) {
+    console.error('Health check failed:', error);
+    throw error;
+  }
+};
+
+export default api;

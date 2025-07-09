@@ -1,0 +1,29 @@
+# Node modules
+node_modules/
+
+# Python virtual environment  
+venv/
+env/
+ENV/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+contracts.db
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Build directories
+build/
+dist/
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
