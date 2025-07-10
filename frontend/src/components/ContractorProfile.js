@@ -23,6 +23,7 @@ const ContractorProfile = ({ contractor, profile, loading }) => {
   }
 
   const formatCurrency = (amount) => {
+    if (!amount) return '$0';
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: 'USD',
@@ -31,142 +32,184 @@ const ContractorProfile = ({ contractor, profile, loading }) => {
     }).format(amount);
   };
 
-  const formatDays = (days) => {
-    if (days < 30) return `${days} days`;
-    if (days < 365) return `${Math.round(days / 30)} months`;
-    return `${Math.round(days / 365)} years`;
+  const formatNumber = (num) => {
+    if (!num) return '0';
+    return new Intl.NumberFormat('en-US').format(num);
   };
+
+  const formatDate = (dateStr) => {
+    if (!dateStr) return 'N/A';
+    try {
+      return new Date(dateStr).toLocaleDateString();
+    } catch {
+      return dateStr;
+    }
+  };
+
+  // Extract data from our API response structure
+  const contractorData = profile.contractor || contractor || {};
+  const profileData = profile.profile || profile || {};
+  
+  // Safe data extraction with defaults
+  const contractorName = contractorData.name || contractor?.name || 'Unknown Contractor';
+  const totalAwards = profileData.total_awards || 0;
+  const totalValue = profileData.total_value || 0;
+  const primaryAgencies = profileData.primary_agencies || [];
+  const naicsCodes = profileData.naics_codes || [];
+  const recentAwards = profileData.recent_awards || [];
+  const performanceMetrics = profileData.performance_metrics || {};
+  const dateRange = profileData.date_range || {};
 
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="bg-white p-6 rounded-lg shadow">
-        <h2 className="text-2xl font-bold text-gray-900 mb-4">{profile.contractor_name}</h2>
+        <h2 className="text-2xl font-bold text-gray-900 mb-4">{contractorName}</h2>
         
         <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
           <div className="text-center">
-            <div className="text-3xl font-bold text-purple-600">{profile.total_active_contracts}</div>
-            <div className="text-sm text-gray-600">Active Contracts</div>
+            <div className="text-3xl font-bold text-purple-600">{formatNumber(totalAwards)}</div>
+            <div className="text-sm text-gray-600">Total Awards</div>
           </div>
           <div className="text-center">
-            <div className="text-3xl font-bold text-green-600">{formatCurrency(profile.total_active_value)}</div>
-            <div className="text-sm text-gray-600">Active Value</div>
+            <div className="text-3xl font-bold text-green-600">{formatCurrency(totalValue)}</div>
+            <div className="text-sm text-gray-600">Total Value</div>
           </div>
           <div className="text-center">
-            <div className="text-3xl font-bold text-blue-600">{formatCurrency(profile.total_historical_value)}</div>
-            <div className="text-sm text-gray-600">Historical Value</div>
+            <div className="text-3xl font-bold text-blue-600">{formatCurrency(performanceMetrics.avg_award_value || 0)}</div>
+            <div className="text-sm text-gray-600">Avg Award Value</div>
           </div>
           <div className="text-center">
-            <div className="text-3xl font-bold text-orange-600">{profile.recompete_schedule.length}</div>
-            <div className="text-sm text-gray-600">Upcoming Recompetes</div>
+            <div className="text-3xl font-bold text-orange-600">{performanceMetrics.active_years || 0}</div>
+            <div className="text-sm text-gray-600">Years Active</div>
           </div>
         </div>
       </div>
 
-      {/* Performance Metrics */}
-      <div className="bg-white p-6 rounded-lg shadow">
-        <h3 className="text-xl font-semibold text-gray-900 mb-4">📈 Performance Metrics</h3>
-        
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-6">
-          <div>
-            <div className="text-lg font-semibold text-gray-900">
-              {formatCurrency(profile.performance_metrics.average_contract_value)}
-            </div>
-            <div className="text-sm text-gray-600">Average Contract Value</div>
-          </div>
-          <div>
-            <div className="text-lg font-semibold text-gray-900">
-              {formatCurrency(profile.performance_metrics.largest_contract_value)}
-            </div>
-            <div className="text-sm text-gray-600">Largest Contract</div>
-          </div>
-          <div>
-            <div className="text-lg font-semibold text-gray-900">
-              {formatDays(profile.performance_metrics.contract_duration_avg_days)}
-            </div>
-            <div className="text-sm text-gray-600">Average Duration</div>
-          </div>
-          <div>
-            <div className="text-lg font-semibold text-gray-900">
-              {profile.performance_metrics.total_historical_contracts}
-            </div>
-            <div className="text-sm text-gray-600">Total Contracts</div>
-          </div>
-          <div>
-            <div className="text-lg font-semibold text-gray-900">
-              {profile.performance_metrics.active_contract_load}
-            </div>
-            <div className="text-sm text-gray-600">Current Workload</div>
-          </div>
-          <div>
-            <div className="text-lg font-semibold text-gray-900">
-              {profile.performance_metrics.recompetes_in_next_12_months}
-            </div>
-            <div className="text-sm text-gray-600">Recompetes (12mo)</div>
-          </div>
-        </div>
-      </div>
-
-      {/* Recompete Schedule */}
-      {profile.recompete_schedule.length > 0 && (
+      {/* Activity Timeline */}
+      {(dateRange.start || dateRange.end) && (
         <div className="bg-white p-6 rounded-lg shadow">
-          <h3 className="text-xl font-semibold text-gray-900 mb-4">⏰ Upcoming Recompetes</h3>
-          <p className="text-gray-600 mb-4">Contracts ending soon - opportunities for competitive action</p>
+          <h3 className="text-xl font-semibold text-gray-900 mb-4">📅 Activity Timeline</h3>
+          
+          <div className="grid grid-cols-2 gap-6">
+            <div>
+              <div className="text-lg font-semibold text-gray-900">
+                {formatDate(dateRange.start)}
+              </div>
+              <div className="text-sm text-gray-600">First Award</div>
+            </div>
+            <div>
+              <div className="text-lg font-semibold text-gray-900">
+                {formatDate(dateRange.end)}
+              </div>
+              <div className="text-sm text-gray-600">Latest Award</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Recent Awards */}
+      {recentAwards && recentAwards.length > 0 && (
+        <div className="bg-white p-6 rounded-lg shadow">
+          <h3 className="text-xl font-semibold text-gray-900 mb-4">🏆 Recent Awards</h3>
+          <p className="text-gray-600 mb-4">Latest contract awards for this contractor</p>
           
           <div className="space-y-4">
-            {profile.recompete_schedule.slice(0, 10).map((recompete, index) => (
+            {recentAwards.slice(0, 10).map((award, index) => (
               <div key={index} className="border border-gray-200 rounded-lg p-4">
                 <div className="flex justify-between items-start">
                   <div className="flex-1">
-                    <h4 className="font-medium text-gray-900">{recompete.title}</h4>
-                    <p className="text-sm text-gray-600 mt-1">{recompete.agency}</p>
+                    <h4 className="font-medium text-gray-900">
+                      {award.title || award.award_id || 'Award'}
+                    </h4>
+                    <p className="text-sm text-gray-600 mt-1">{award.agency || 'Unknown Agency'}</p>
+                    {award.award_type && (
+                      <span className="inline-block bg-purple-100 text-purple-800 text-xs px-2 py-1 rounded mt-2">
+                        {award.award_type}
+                      </span>
+                    )}
                   </div>
-                  <div className="text-right">
-                    <div className="text-lg font-semibold text-red-600">
-                      {recompete.days_remaining ? `${recompete.days_remaining} days` : 'Ended'}
+                  <div className="text-right ml-4">
+                    <div className="text-lg font-semibold text-green-600">
+                      {formatCurrency(award.amount)}
                     </div>
-                    <div className="text-sm text-gray-600">{formatCurrency(recompete.award_amount)}</div>
+                    <div className="text-sm text-gray-600">
+                      {formatDate(award.start_date)}
+                    </div>
                   </div>
                 </div>
-                <div className="mt-2 text-sm text-gray-500">
-                  Ends: {recompete.end_date} | ID: {recompete.award_id}
-                </div>
+                {award.naics_code && (
+                  <div className="mt-2 text-sm text-gray-500">
+                    NAICS: {award.naics_code}
+                  </div>
+                )}
               </div>
             ))}
           </div>
+          
+          {recentAwards.length > 10 && (
+            <div className="mt-4 text-center text-sm text-gray-500">
+              Showing 10 of {recentAwards.length} recent awards
+            </div>
+          )}
         </div>
       )}
 
       {/* Top Agencies & NAICS */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Top Agencies */}
-        <div className="bg-white p-6 rounded-lg shadow">
-          <h3 className="text-xl font-semibold text-gray-900 mb-4">🏛️ Top Agencies</h3>
-          
-          <div className="space-y-3">
-            {profile.top_agencies.slice(0, 8).map((agency, index) => (
-              <div key={index} className="flex justify-between items-center">
-                <span className="text-gray-900 text-sm">{agency.name}</span>
-                <span className="text-purple-600 font-medium">{agency.count}</span>
+        {/* Primary Agencies */}
+        {primaryAgencies && primaryAgencies.length > 0 && (
+          <div className="bg-white p-6 rounded-lg shadow">
+            <h3 className="text-xl font-semibold text-gray-900 mb-4">🏛️ Primary Agencies</h3>
+            
+            <div className="space-y-3">
+              {primaryAgencies.slice(0, 8).map((agency, index) => (
+                <div key={index} className="flex justify-between items-center">
+                  <span className="text-gray-900 text-sm">{agency}</span>
+                  <span className="text-purple-600 font-medium">✓</span>
+                </div>
+              ))}
+            </div>
+            
+            {primaryAgencies.length > 8 && (
+              <div className="mt-3 text-sm text-gray-500">
+                +{primaryAgencies.length - 8} more agencies
               </div>
-            ))}
+            )}
           </div>
-        </div>
+        )}
 
-        {/* Top NAICS */}
-        <div className="bg-white p-6 rounded-lg shadow">
-          <h3 className="text-xl font-semibold text-gray-900 mb-4">🏭 Top NAICS Codes</h3>
-          
-          <div className="space-y-3">
-            {profile.top_naics_codes.slice(0, 8).map((naics, index) => (
-              <div key={index} className="flex justify-between items-center">
-                <span className="text-gray-900 text-sm">{naics.code}</span>
-                <span className="text-purple-600 font-medium">{naics.count}</span>
+        {/* NAICS Codes */}
+        {naicsCodes && naicsCodes.length > 0 && (
+          <div className="bg-white p-6 rounded-lg shadow">
+            <h3 className="text-xl font-semibold text-gray-900 mb-4">🏭 NAICS Codes</h3>
+            
+            <div className="space-y-3">
+              {naicsCodes.slice(0, 8).map((naics, index) => (
+                <div key={index} className="">
+                  <span className="text-gray-900 text-sm block">{naics}</span>
+                </div>
+              ))}
+            </div>
+            
+            {naicsCodes.length > 8 && (
+              <div className="mt-3 text-sm text-gray-500">
+                +{naicsCodes.length - 8} more NAICS codes
               </div>
-            ))}
+            )}
           </div>
-        </div>
+        )}
       </div>
+
+      {/* Debug Information (only in development) */}
+      {process.env.NODE_ENV === 'development' && (
+        <div className="bg-gray-50 p-4 rounded-lg">
+          <h4 className="font-medium text-gray-700 mb-2">Debug Information:</h4>
+          <pre className="text-xs text-gray-600 overflow-auto">
+            {JSON.stringify({ contractor, profile }, null, 2)}
+          </pre>
+        </div>
+      )}
     </div>
   );
 };
