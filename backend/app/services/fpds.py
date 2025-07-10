@@ -4,6 +4,7 @@ from datetime import datetime, date
 from typing import List, Dict, Any, Optional
 import json
 import logging
+import time
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -77,23 +78,38 @@ class FPDSService:
                 ],
                 "sort": "Award Amount",
                 "order": "desc",
-                "limit": limit,
+                "limit": min(limit, 100),  # USASpending API has limits
                 "page": 1
             }
             
             logger.info(f"📡 USASpending.gov API request: {self.base_url}")
             logger.info(f"📋 Request payload: {json.dumps(payload, indent=2)}")
             
-            # Make the API request
-            response = requests.post(
-                self.base_url,
-                json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "User-Agent": "Federal-Contract-Research-Tool/1.0"
-                },
-                timeout=30
-            )
+            # Make the API request with retry logic
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    response = requests.post(
+                        self.base_url,
+                        json=payload,
+                        headers={
+                            "Content-Type": "application/json",
+                            "User-Agent": "Federal-Contract-Research-Tool/1.0"
+                        },
+                        timeout=120  # Increased timeout to 2 minutes
+                    )
+                    break  # If successful, break out of retry loop
+                except requests.exceptions.Timeout:
+                    if attempt < max_retries - 1:
+                        logger.warning(f"⚠️ API timeout, retrying ({attempt + 1}/{max_retries})...")
+                        time.sleep(2)  # Wait 2 seconds before retry
+                        continue
+                    else:
+                        logger.error("❌ API timeout after all retries")
+                        return []
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"❌ API request failed: {str(e)}")
+                    return []
             
             logger.info(f"📊 API Response Status: {response.status_code}")
             
@@ -127,28 +143,27 @@ class FPDSService:
         """Build the filters object according to USASpending API specification"""
         filters = {}
         
-        # Add keywords filter (required for many endpoints)
-        if keywords:
-            filters["keywords"] = [keywords]
-        else:
-            # If no keywords provided, search for contracts only
-            filters["award_type_codes"] = ["A", "B", "C", "D"]  # Contract types
+        # Add keywords filter - fix the None string issue
+        if keywords and keywords != "None" and keywords.strip() and keywords.lower() != "none":
+            filters["keywords"] = [keywords.strip()]
+            logger.info(f"🔍 Adding keyword filter: {keywords}")
         
-        # Add agency filter with proper structure
-        if awarding_agency:
+        # Add agency filter with proper structure - fix the None string issue  
+        if awarding_agency and awarding_agency != "None" and awarding_agency.strip() and awarding_agency.lower() != "none":
             filters["agencies"] = [
                 {
                     "type": "awarding",
                     "tier": "toptier", 
-                    "name": awarding_agency
+                    "name": awarding_agency.strip()
                 }
             ]
+            logger.info(f"🏛️ Adding agency filter: {awarding_agency}")
         
         # Add time period filter
         if award_date_from or award_date_to:
-            # Default to last 2 years if no dates provided
+            # Default to last year if no dates provided
             if not award_date_from:
-                award_date_from = "2022-01-01"
+                award_date_from = "2024-01-01"
             if not award_date_to:
                 award_date_to = datetime.now().strftime("%Y-%m-%d")
             
@@ -159,17 +174,16 @@ class FPDSService:
                 }
             ]
         else:
-            # Default to last 2 years
+            # Default to last year instead of 3 years for better performance
             filters["time_period"] = [
                 {
-                    "start_date": "2022-01-01", 
+                    "start_date": "2024-01-01", 
                     "end_date": datetime.now().strftime("%Y-%m-%d")
                 }
             ]
         
         # Always include contract award types
-        if "award_type_codes" not in filters:
-            filters["award_type_codes"] = ["A", "B", "C", "D"]
+        filters["award_type_codes"] = ["A", "B", "C", "D"]
         
         logger.info(f"🔧 Built filters: {json.dumps(filters, indent=2)}")
         return filters
