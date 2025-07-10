@@ -11,9 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Created CHANGELOG.md to track project changes
 - Initial documentation of the project structure
 
+### Fixed
+- Fixed USASpending.gov API integration to properly handle awarding agency and keywords filters
+- Improved error handling and filter validation in FPDS service
+- Enhanced logging for better debugging of search parameters
+
 ### Known Issues
-- Awarding agency and keywords fields do not influence contract awards search results
-- USASpending.gov API filters may not be working as expected
+- Some USASpending.gov API responses may have inconsistent field names
+- Sample data fallback may not reflect actual search parameters
 
 ### Project Structure
 - **Backend**: Python FastAPI application
