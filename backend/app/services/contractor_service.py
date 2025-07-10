@@ -39,6 +39,7 @@ class ContractorService:
                 latest_award_date TEXT,
                 primary_agencies TEXT,
                 primary_naics TEXT,
+                profile_data TEXT,
                 last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
@@ -91,22 +92,69 @@ class ContractorService:
                 logger.warning(f"⚠️ No recipients found for query: '{name_query}'")
                 return []
             
-            # Step 2: Get spending data for each recipient
+            # Step 2: Get spending data for each unique recipient (avoid duplicates)
             contractors = []
-            for recipient in recipients[:limit]:  # Limit recipients to process
+            seen_names = set()
+            
+            for recipient in recipients[:limit * 2]:  # Get extra to account for duplicates
+                recipient_name = recipient.get('recipient_name', '').strip()
+                
+                # Skip duplicates based on normalized name
+                normalized_name = self._normalize_contractor_name(recipient_name)
+                if normalized_name in seen_names:
+                    logger.info(f"🔄 Skipping duplicate: {recipient_name}")
+                    continue
+                
+                seen_names.add(normalized_name)
+                
                 contractor_data = self._get_contractor_spending_data(recipient)
                 if contractor_data:
                     contractors.append(contractor_data)
+                    
+                    # Cache the contractor profile for fast retrieval later
+                    self._cache_contractor_profile(contractor_data)
+                
+                # Stop when we have enough unique contractors
+                if len(contractors) >= limit:
+                    break
             
             # Sort by total value descending
             contractors.sort(key=lambda x: x.get('total_value', 0), reverse=True)
             
-            logger.info(f"✅ Found {len(contractors)} contractors with spending data")
+            logger.info(f"✅ Found {len(contractors)} unique contractors with spending data")
             return contractors[:limit]
             
         except Exception as e:
             logger.error(f"❌ Error searching contractors: {str(e)}")
             return self._get_cached_contractors(name_query or "", limit)
+    
+    def _normalize_contractor_name(self, name: str) -> str:
+        """
+        Normalize contractor names to detect duplicates
+        """
+        if not name:
+            return ""
+        
+        # Convert to uppercase and remove common variations
+        normalized = name.upper().strip()
+        
+        # Remove common suffixes that might cause duplicates
+        suffixes_to_remove = [
+            ', LLC', ' LLC', ', INC', ' INC', ', CORP', ' CORP', 
+            ', CORPORATION', ' CORPORATION', ', LTD', ' LTD',
+            ', CO', ' CO', ', COMPANY', ' COMPANY'
+        ]
+        
+        for suffix in suffixes_to_remove:
+            if normalized.endswith(suffix):
+                normalized = normalized[:-len(suffix)].strip()
+                break
+        
+        # Remove extra spaces and punctuation
+        normalized = ' '.join(normalized.split())
+        normalized = normalized.replace('.', '').replace(',', '')
+        
+        return normalized
     
     def _find_recipients_fast(self, search_text: str) -> List[Dict[str, Any]]:
         """
@@ -118,7 +166,7 @@ class ContractorService:
         try:
             payload = {
                 "search_text": search_text,
-                "limit": 10
+                "limit": 15  # Get more results to account for filtering duplicates
             }
             
             response = requests.post(
@@ -128,7 +176,7 @@ class ContractorService:
                     "Content-Type": "application/json",
                     "User-Agent": "Federal-Contract-Research-Tool/1.0"
                 },
-                timeout=10  # Fast timeout for autocomplete
+                timeout=15  # Increased timeout to reduce failures
             )
             
             if response.status_code == 200:
@@ -145,6 +193,9 @@ class ContractorService:
                 logger.warning(f"⚠️ Autocomplete API error: {response.status_code}")
                 return []
                 
+        except requests.exceptions.Timeout:
+            logger.error(f"❌ Autocomplete timeout for '{search_text}' - using cached data if available")
+            return []
         except Exception as e:
             logger.error(f"❌ Error in recipient autocomplete: {str(e)}")
             return []
@@ -202,7 +253,7 @@ class ContractorService:
                     "Content-Type": "application/json",
                     "User-Agent": "Federal-Contract-Research-Tool/1.0"
                 },
-                timeout=15
+                timeout=20  # Slightly increased timeout for reliability
             )
             
             if response.status_code == 200:
@@ -223,6 +274,9 @@ class ContractorService:
                 logger.warning(f"⚠️ Spending API error for {recipient_name}: {response.status_code}")
                 return None
                 
+        except requests.exceptions.Timeout:
+            logger.error(f"❌ Spending data timeout for {recipient_name}")
+            return None
         except Exception as e:
             logger.error(f"❌ Error getting spending data for {recipient_name}: {str(e)}")
             return None
@@ -307,12 +361,19 @@ class ContractorService:
     
     def get_contractor_profile(self, contractor_name: str) -> Optional[Dict[str, Any]]:
         """
-        Get detailed profile for a specific contractor using the FAST approach
+        Get detailed profile for a specific contractor with smart caching
         """
         logger.info(f"📊 Getting detailed profile for contractor: {contractor_name}")
         
         try:
-            # Use the same fast search approach
+            # First check if we have this contractor cached from a recent search
+            cached_profile = self._get_cached_contractor_profile(contractor_name)
+            if cached_profile:
+                logger.info(f"📋 Using cached profile for {contractor_name}")
+                return cached_profile
+            
+            # If not cached, search for the contractor
+            logger.info(f"🔍 No cached data, searching for: {contractor_name}")
             contractors = self.search_contractors(contractor_name, limit=1)
             
             if contractors:
@@ -324,6 +385,84 @@ class ContractorService:
             
         except Exception as e:
             logger.error(f"❌ Error getting contractor profile: {str(e)}")
+            return self._get_cached_contractor_profile(contractor_name)
+    
+    def _cache_contractor_profile(self, profile: Dict[str, Any]) -> None:
+        """
+        Cache contractor profile for fast retrieval
+        """
+        try:
+            conn = sqlite3.connect(self.database_path)
+            cursor = conn.cursor()
+            
+            cursor.execute(
+                "INSERT OR REPLACE INTO contractor_profiles (contractor_name, recipient_hash, uei, total_awards, total_value, first_award_date, latest_award_date, primary_agencies, primary_naics, profile_data, last_updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    profile["name"],
+                    profile.get("recipient_hash"),
+                    profile.get("uei"),
+                    profile["total_awards"],
+                    profile["total_value"],
+                    profile.get("first_award_date"),
+                    profile.get("latest_award_date"),
+                    json.dumps(profile.get("primary_agencies", [])),
+                    json.dumps(profile.get("naics_codes", [])),
+                    json.dumps(profile),  # Store complete profile
+                    datetime.now().isoformat()
+                )
+            )
+            
+            conn.commit()
+            conn.close()
+            
+            logger.info(f"💾 Cached profile for {profile['name']}")
+            
+        except Exception as e:
+            logger.error(f"❌ Error caching contractor profile: {str(e)}")
+    
+    def _get_cached_contractor_profile(self, contractor_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Get contractor profile from cache with flexible name matching
+        """
+        try:
+            conn = sqlite3.connect(self.database_path)
+            cursor = conn.cursor()
+            
+            # Try exact match first
+            cursor.execute(
+                "SELECT profile_data, last_updated FROM contractor_profiles WHERE contractor_name = ?",
+                (contractor_name,)
+            )
+            row = cursor.fetchone()
+            
+            # If no exact match, try normalized name matching
+            if not row:
+                normalized_search = self._normalize_contractor_name(contractor_name)
+                cursor.execute(
+                    "SELECT profile_data, last_updated FROM contractor_profiles WHERE contractor_name LIKE ?",
+                    (f"%{normalized_search}%",)
+                )
+                row = cursor.fetchone()
+            
+            conn.close()
+            
+            if row:
+                profile_data, last_updated = row
+                
+                # Check if cache is recent (less than 1 hour old)
+                cache_time = datetime.fromisoformat(last_updated)
+                age_hours = (datetime.now() - cache_time).total_seconds() / 3600
+                
+                if age_hours < 1:  # Use cache if less than 1 hour old
+                    logger.info(f"📋 Found cached profile for {contractor_name} (age: {age_hours:.1f} hours)")
+                    return json.loads(profile_data)
+                else:
+                    logger.info(f"🔄 Cached profile for {contractor_name} is {age_hours:.1f} hours old, will refresh")
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ Error getting cached contractor profile: {str(e)}")
             return None
     
     def _get_popular_contractors(self, limit: int) -> List[Dict[str, Any]]:
@@ -349,15 +488,22 @@ class ContractorService:
         results = []
         for contractor_name in popular_contractors[:limit]:
             try:
+                # Check cache first
+                cached = self._get_cached_contractor_profile(contractor_name)
+                if cached:
+                    results.append(cached)
+                    continue
+                
                 # Get spending data for each popular contractor
                 recipients = self._find_recipients_fast(contractor_name)
                 if recipients:
                     contractor_data = self._get_contractor_spending_data(recipients[0])
                     if contractor_data:
                         results.append(contractor_data)
+                        self._cache_contractor_profile(contractor_data)
                         
                 # Don't overload the API
-                time.sleep(0.2)
+                time.sleep(0.3)
                 
             except Exception as e:
                 logger.warning(f"⚠️ Error getting data for {contractor_name}: {str(e)}")
@@ -375,12 +521,12 @@ class ContractorService:
             
             if name_query:
                 cursor.execute(
-                    "SELECT * FROM contractor_profiles WHERE contractor_name LIKE ? ORDER BY total_value DESC LIMIT ?",
+                    "SELECT profile_data FROM contractor_profiles WHERE contractor_name LIKE ? ORDER BY total_value DESC LIMIT ?",
                     (f"%{name_query}%", limit)
                 )
             else:
                 cursor.execute(
-                    "SELECT * FROM contractor_profiles ORDER BY total_value DESC LIMIT ?",
+                    "SELECT profile_data FROM contractor_profiles ORDER BY total_value DESC LIMIT ?",
                     (limit,)
                 )
             
@@ -389,15 +535,12 @@ class ContractorService:
             
             contractors = []
             for row in rows:
-                contractors.append({
-                    "name": row[1],
-                    "total_awards": row[3],
-                    "total_value": row[4],
-                    "first_award_date": row[5],
-                    "latest_award_date": row[6],
-                    "primary_agencies": json.loads(row[7]) if row[7] else [],
-                    "naics_codes": json.loads(row[8]) if row[8] else []
-                })
+                try:
+                    profile = json.loads(row[0])
+                    contractors.append(profile)
+                except Exception as e:
+                    logger.warning(f"⚠️ Error loading cached profile: {str(e)}")
+                    continue
             
             logger.info(f"📋 Returned {len(contractors)} cached contractors")
             return contractors
