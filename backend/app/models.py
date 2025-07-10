@@ -5,13 +5,17 @@ from datetime import datetime
 
 class SearchRequest(BaseModel):
     keyword: Optional[str] = None
+    keywords: Optional[str] = None  # Alternative field name
     agency: Optional[str] = None
+    vendor_name: Optional[str] = None  # Add vendor_name for awards filtering
     naics_code: Optional[str] = None
     set_aside: Optional[str] = None
     posted_date_from: Optional[str] = None
     posted_date_to: Optional[str] = None
     award_date_from: Optional[str] = None
     award_date_to: Optional[str] = None
+    min_amount: Optional[float] = None  # Add min_amount for awards filtering
+    max_amount: Optional[float] = None  # Add max_amount for awards filtering
     limit: int = 50
     offset: int = 0
     include_awards: bool = False
@@ -74,12 +78,14 @@ class AnalyticsSummary(BaseModel):
     top_naics_codes: List[NAICSCount] = []
     top_naics: List[NAICSCount] = []  # Alias for top_naics_codes
     top_vendors: List[VendorValue] = []
+    top_recipients: List[VendorValue] = []  # Add alias for awards data
     recent_activity: List[dict] = []
 
 class SearchResponse(BaseModel):
     contracts: List[ContractOpportunity] = []
     awards: List[AwardedContract] = []
     total_count: int = 0
+    awards_count: int = 0  # Add awards count
     has_more: bool = False
 
 # New models for enhanced features
