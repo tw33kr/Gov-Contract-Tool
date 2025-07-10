@@ -39,12 +39,15 @@ async def get_analytics_summary_compat(
 async def search_contracts(
     keywords: Optional[str] = Query(None, alias="keyword"),  # Accept 'keyword' but use as 'keywords'
     agency: Optional[str] = None,
+    vendor_name: Optional[str] = None,  # Add vendor_name parameter for awards
     naics: Optional[str] = None,
     set_aside: Optional[str] = None,
     posted_from: Optional[str] = None,
     posted_to: Optional[str] = None,
     award_date_from: Optional[str] = None,
     award_date_to: Optional[str] = None,
+    min_amount: Optional[float] = None,  # Add min_amount for awards
+    max_amount: Optional[float] = None,  # Add max_amount for awards
     limit: int = 50,
     include_awards: bool = False
 ):
@@ -54,7 +57,7 @@ async def search_contracts(
     try:
         logger.info(f"🔍 GET search request: keywords={keywords}, agency={agency}, include_awards={include_awards}")
         
-        # Call the service with correct parameter names
+        # For opportunities search (SAM.gov), use original parameters
         opportunities, awards = sam_service.search_contracts(
             keywords=keywords,  # Use 'keywords' for service call
             agency=agency,
@@ -65,6 +68,48 @@ async def search_contracts(
             limit=limit,
             include_awards=include_awards
         )
+        
+        # If awards are requested, also search FPDS with proper parameter mapping
+        if include_awards:
+            logger.info("🏆 Awards requested - fetching from FPDS with proper parameter mapping")
+            from app.services.fpds import FPDSService
+            fpds_service = FPDSService()
+            
+            # Map frontend parameters to FPDS service parameters
+            fpds_awards = fpds_service.search_awards(
+                keywords=keywords,  # Map 'keyword' to 'keywords'
+                awarding_agency=agency,  # Map 'agency' to 'awarding_agency'
+                award_date_from=award_date_from,
+                award_date_to=award_date_to,
+                limit=limit
+            )
+            
+            # Filter by vendor name if specified (post-processing since FPDS API doesn't support this filter)
+            if vendor_name and fpds_awards:
+                vendor_name_lower = vendor_name.lower()
+                fpds_awards = [
+                    award for award in fpds_awards 
+                    if vendor_name_lower in award.get('recipient_name', '').lower()
+                ]
+                logger.info(f"🔍 Filtered awards by vendor name '{vendor_name}': {len(fpds_awards)} results")
+            
+            # Filter by amount range if specified (post-processing)
+            if (min_amount is not None or max_amount is not None) and fpds_awards:
+                filtered_awards = []
+                for award in fpds_awards:
+                    award_amount = award.get('award_amount')
+                    if award_amount is not None:
+                        if min_amount is not None and award_amount < min_amount:
+                            continue
+                        if max_amount is not None and award_amount > max_amount:
+                            continue
+                    filtered_awards.append(award)
+                fpds_awards = filtered_awards
+                logger.info(f"🔍 Filtered awards by amount range ${min_amount}-${max_amount}: {len(fpds_awards)} results")
+            
+            # Replace the awards from sam_service with FPDS awards
+            awards = fpds_awards
+            logger.info(f"✅ Using {len(awards)} awards from FPDS service")
         
         # Convert to response format
         contract_opportunities = []
