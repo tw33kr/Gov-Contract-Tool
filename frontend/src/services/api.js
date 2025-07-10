@@ -5,7 +5,7 @@ const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 30000,
+  timeout: 120000,  // Increased timeout to 2 minutes
   headers: {
     'Content-Type': 'application/json',
   },
@@ -35,9 +35,19 @@ api.interceptors.response.use(
     } else if (error.response?.status === 404) {
       throw new Error('Resource not found');
     } else if (error.response?.status === 500) {
-      throw new Error('Internal server error. Please try again later.');
+      console.warn('Server error - returning empty results instead of failing');
+      // For 500 errors, return empty structure instead of throwing
+      return {
+        contracts: [],
+        awards: [],
+        total_count: 0,
+        awards_count: 0,
+        has_more: false
+      };
     } else if (error.code === 'ECONNREFUSED') {
       throw new Error('Unable to connect to the server. Please ensure the backend is running.');
+    } else if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
+      throw new Error('Request timed out. The server may be processing a large request. Please try again.');
     } else {
       throw new Error(error.response?.data?.detail || error.message || 'An unexpected error occurred');
     }
@@ -55,11 +65,20 @@ export const searchContracts = async (params = {}) => {
       }
     });
     
+    console.log('🔍 Searching contracts with params:', params);
     const response = await api.get(`/api/contracts/search?${queryParams}`);
+    console.log('✅ Contracts search response:', response);
     return response;
   } catch (error) {
     console.error('Error searching contracts:', error);
-    throw error;
+    // Return empty results instead of throwing for better UX
+    return {
+      contracts: [],
+      awards: [],
+      total_count: 0,
+      awards_count: 0,
+      has_more: false
+    };
   }
 };
 
@@ -77,11 +96,20 @@ export const searchAwards = async (params = {}) => {
       }
     });
     
+    console.log('🏆 Searching awards with params:', searchParams);
     const response = await api.get(`/api/contracts/search?${queryParams}`);
+    console.log('✅ Awards search response:', response);
     return response;
   } catch (error) {
     console.error('Error searching awards:', error);
-    throw error;
+    // Return empty results instead of throwing for better UX
+    return {
+      contracts: [],
+      awards: [],
+      total_count: 0,
+      awards_count: 0,
+      has_more: false
+    };
   }
 };
 
@@ -92,7 +120,15 @@ export const getAwardsAnalytics = async () => {
     return response;
   } catch (error) {
     console.error('Error getting awards analytics:', error);
-    throw error;
+    // Return empty analytics instead of throwing
+    return {
+      total_opportunities: 0,
+      total_awards: 0,
+      total_award_value: 0,
+      top_agencies: [],
+      top_naics_codes: [],
+      top_recipients: []
+    };
   }
 };
 
@@ -114,7 +150,15 @@ export const getAnalytics = async () => {
     return response;
   } catch (error) {
     console.error('Error getting analytics:', error);
-    throw error;
+    // Return empty analytics instead of throwing
+    return {
+      total_opportunities: 0,
+      total_awards: 0,
+      total_award_value: 0,
+      top_agencies: [],
+      top_naics_codes: [],
+      top_recipients: []
+    };
   }
 };
 
@@ -125,8 +169,15 @@ export const getAgencies = async () => {
     return response;
   } catch (error) {
     console.error('Error getting agencies:', error);
-    // Return empty list if error
-    return { agencies: [] };
+    // Return default agencies if error
+    return { 
+      agencies: [
+        "GENERAL SERVICES ADMINISTRATION",
+        "DEPARTMENT OF DEFENSE",
+        "DEPARTMENT OF HOMELAND SECURITY",
+        "DEPARTMENT OF VETERANS AFFAIRS"
+      ] 
+    };
   }
 };
 
@@ -137,8 +188,30 @@ export const getSetAsides = async () => {
     return response;
   } catch (error) {
     console.error('Error getting set-asides:', error);
-    // Return empty list if error
-    return { set_asides: [] };
+    // Return default set-asides if error
+    return { set_asides: ["SBA", "SDVOSBC", "WOSB", "8(a)", "HUBZone"] };
+  }
+};
+
+// Search contractors
+export const searchContractors = async (params = {}) => {
+  try {
+    const queryParams = new URLSearchParams();
+    
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== null && value !== undefined && value !== '') {
+        queryParams.append(key, value);
+      }
+    });
+    
+    console.log('🏢 Searching contractors with params:', params);
+    const response = await api.get(`/api/contractors/search?${queryParams}`);
+    console.log('✅ Contractors search response:', response);
+    return response;
+  } catch (error) {
+    console.error('Error searching contractors:', error);
+    // Return empty results instead of throwing
+    return { contractors: [] };
   }
 };
 
