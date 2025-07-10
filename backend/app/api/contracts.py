@@ -223,7 +223,8 @@ async def search_contractors(
         fpds_service = FPDSService()
         
         # Get all awards and extract contractor information
-        awards = fpds_service.search_awards(keywords=name_query, limit=1000)
+        # Fixed: Change limit from 1000 to 100 to comply with USASpending.gov API limits
+        awards = fpds_service.search_awards(keywords=name_query, limit=100)
         
         # Group by contractor/recipient
         contractor_data = {}
@@ -301,7 +302,8 @@ async def get_contractor_details(contractor_name: str):
         fpds_service = FPDSService()
         
         # Get all awards for this contractor
-        awards = fpds_service.search_awards(limit=1000)
+        # Fixed: Change limit from 1000 to 100 to comply with USASpending.gov API limits
+        awards = fpds_service.search_awards(limit=100)
         contractor_awards = [
             award for award in awards 
             if award.get("recipient_name", "").lower() == contractor_name.lower()
@@ -441,7 +443,7 @@ async def export_awards(
             raise HTTPException(status_code=400, detail="Unsupported format. Use 'csv' or 'excel'")
             
     except Exception as e:
-        logger.error(f"❌ Error exporting awards: {str(e)}")
+        logger.error(f"❌ Error exporting awards: {str(e}\")")
         raise HTTPException(status_code=500, detail=f"Error exporting awards: {str(e)}")
 
 # Health check endpoint
