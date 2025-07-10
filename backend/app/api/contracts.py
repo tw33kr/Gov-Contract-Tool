@@ -4,6 +4,7 @@ from pydantic import BaseModel
 import logging
 
 from app.services.sam_gov import SAMGovService
+from app.services.contractor_service import ContractorService
 from app.models import SearchRequest, SearchResponse, ContractOpportunity, AwardedContract, AnalyticsSummary, ContractorProfile, ContractorSearchResponse, ContractTimelineItem, AgencyCount, NAICSCount
 
 # Configure logging
@@ -12,8 +13,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Initialize the SAM.gov service
+# Initialize services
 sam_service = SAMGovService()
+contractor_service = ContractorService()
 
 # Add backwards compatibility routes (without /contracts prefix)
 @router.get("/agencies", include_in_schema=False)
@@ -284,93 +286,148 @@ async def test_awards():
             "sample_awards": []
         }
 
-# Contractors/Vendor search endpoints
+# ====== CONTRACTOR INTELLIGENCE ENDPOINTS ======
+
 @router.get("/contractors/search")
 async def search_contractors(
     name_query: Optional[str] = None,
     limit: int = 20
 ):
     """
-    Search for contractors/vendors based on awards data
+    Search for contractors/vendors with comprehensive pagination and data retrieval
+    
+    This endpoint now uses proper pagination to retrieve complete datasets,
+    similar to what you see on USASpending.gov (e.g., 234 records for Planned Systems International)
     """
     try:
         logger.info(f"🔍 Contractor search request: name_query='{name_query}', limit={limit}")
         
-        # Use FPDS service to search for contractors in awards data
-        from app.services.fpds import FPDSService
-        fpds_service = FPDSService()
-        
-        # Get all awards and extract contractor information
-        awards = fpds_service.search_awards(keywords=name_query, limit=1000)
-        
-        if not awards:
-            logger.warning("⚠️ No awards data available for contractor search")
-            return ContractorSearchResponse(contractors=[])
-        
-        # Group by contractor/recipient
-        contractor_data = {}
-        for award in awards:
-            recipient_name = award.get("recipient_name", "Unknown")
-            
-            # Filter by name query if provided
-            if name_query and name_query.lower() not in recipient_name.lower():
-                continue
-                
-            if recipient_name not in contractor_data:
-                contractor_data[recipient_name] = {
-                    "name": recipient_name,
-                    "total_awards": 0,
-                    "total_value": 0,
-                    "agencies": set(),
-                    "award_types": set(),
-                    "recent_awards": []
-                }
-            
-            contractor_data[recipient_name]["total_awards"] += 1
-            if award.get("award_amount"):
-                contractor_data[recipient_name]["total_value"] += award["award_amount"]
-            
-            contractor_data[recipient_name]["agencies"].add(award.get("awarding_agency", "Unknown"))
-            contractor_data[recipient_name]["award_types"].add(award.get("award_type", "Unknown"))
-            
-            # Keep recent awards (limit to 5 per contractor)
-            if len(contractor_data[recipient_name]["recent_awards"]) < 5:
-                contractor_data[recipient_name]["recent_awards"].append({
-                    "award_id": award.get("award_id"),
-                    "title": award.get("title", award.get("description", "")[:100]),
-                    "amount": award.get("award_amount"),
-                    "agency": award.get("awarding_agency"),
-                    "date": award.get("start_date")
-                })
-        
-        # Convert to list format expected by ContractorSearchResponse
-        contractors = []
-        for name, data in contractor_data.items():
-            contractors.append({
-                "name": data["name"],
-                "total_awards": data["total_awards"],
-                "total_value": data["total_value"],
-                "agencies": list(data["agencies"]),
-                "award_types": list(data["award_types"]),
-                "recent_awards": data["recent_awards"]
-            })
-        
-        # Sort by total value descending
-        contractors.sort(key=lambda x: x["total_value"], reverse=True)
-        
-        # Limit results
-        contractors = contractors[:limit]
-        
-        logger.info(f"✅ Found {len(contractors)} contractors matching query")
-        
-        return ContractorSearchResponse(
-            contractors=contractors
+        # Use the new ContractorService with pagination
+        contractors = contractor_service.search_contractors(
+            name_query=name_query,
+            limit=limit
         )
+        
+        if contractors:
+            logger.info(f"✅ Found {len(contractors)} contractors")
+            # Log details about the first result for debugging
+            first = contractors[0]
+            logger.info(f"📊 Top result: {first['name']} - {first['total_awards']} awards, ${first['total_value']:,.0f} total value")
+        else:
+            logger.warning(f"⚠️ No contractors found for query: '{name_query}'")
+        
+        return ContractorSearchResponse(contractors=contractors)
         
     except Exception as e:
         logger.error(f"❌ Error searching contractors: {str(e)}")
         # Return empty results instead of raising exception
         return ContractorSearchResponse(contractors=[])
+
+@router.get("/contractors/{contractor_name}/profile")
+async def get_contractor_profile(contractor_name: str):
+    """
+    Get detailed profile for a specific contractor
+    
+    This endpoint retrieves comprehensive contractor data using pagination
+    to get complete award histories, similar to USASpending.gov's detailed views
+    """
+    try:
+        logger.info(f"📊 Getting profile for contractor: {contractor_name}")
+        
+        # Get detailed profile using the ContractorService
+        profile = contractor_service.get_contractor_profile(contractor_name)
+        
+        if profile:
+            logger.info(f"✅ Retrieved profile for {contractor_name}: {profile['total_awards']} awards, ${profile['total_value']:,.0f} total value")
+            
+            # Convert to expected response format
+            return {
+                "contractor": {
+                    "name": profile["name"],
+                    "total_awards": profile["total_awards"],
+                    "total_value": profile["total_value"],
+                    "latest_award_date": profile.get("latest_award_date"),
+                    "first_award_date": profile.get("first_award_date")
+                },
+                "profile": {
+                    "total_awards": profile["total_awards"],
+                    "total_value": profile["total_value"],
+                    "primary_agencies": profile.get("primary_agencies", []),
+                    "naics_codes": profile.get("naics_codes", []),
+                    "award_types": profile.get("award_types", []),
+                    "recent_awards": profile.get("recent_awards", []),
+                    "date_range": {
+                        "start": profile.get("first_award_date"),
+                        "end": profile.get("latest_award_date")
+                    },
+                    "performance_metrics": {
+                        "avg_award_value": profile["total_value"] / max(profile["total_awards"], 1),
+                        "active_years": self._calculate_active_years(
+                            profile.get("first_award_date"),
+                            profile.get("latest_award_date")
+                        )
+                    }
+                }
+            }
+        else:
+            logger.warning(f"⚠️ No profile found for contractor: {contractor_name}")
+            raise HTTPException(status_code=404, detail=f"Contractor '{contractor_name}' not found")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error getting contractor profile: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error retrieving contractor profile")
+
+def _calculate_active_years(start_date: Optional[str], end_date: Optional[str]) -> float:
+    """
+    Calculate years of activity for a contractor
+    """
+    if not start_date or not end_date:
+        return 0.0
+    
+    try:
+        from datetime import datetime
+        start = datetime.fromisoformat(start_date.replace('Z', '+00:00') if 'Z' in start_date else start_date[:10])
+        end = datetime.fromisoformat(end_date.replace('Z', '+00:00') if 'Z' in end_date else end_date[:10])
+        return round((end - start).days / 365.25, 1)
+    except Exception:
+        return 0.0
+
+@router.get("/contractors/test/{contractor_name}")
+async def test_contractor_search(contractor_name: str):
+    """
+    Test endpoint to debug contractor search issues
+    
+    Use this to test specific contractor searches and see detailed logging
+    Example: /api/contractors/test/Planned%20Systems%20International
+    """
+    try:
+        logger.info(f"📧 TESTING contractor search for: {contractor_name}")
+        
+        # Test the search with detailed logging
+        contractors = contractor_service.search_contractors(
+            name_query=contractor_name,
+            limit=5
+        )
+        
+        return {
+            "test_query": contractor_name,
+            "contractors_found": len(contractors),
+            "contractors": contractors,
+            "message": f"Test completed for '{contractor_name}'",
+            "tip": "Check backend logs for detailed API call information"
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Test failed for {contractor_name}: {str(e)}")
+        return {
+            "test_query": contractor_name,
+            "contractors_found": 0,
+            "contractors": [],
+            "error": str(e),
+            "message": "Test failed - check backend logs for details"
+        }
 
 # Health check endpoint
 @router.get("/health")
