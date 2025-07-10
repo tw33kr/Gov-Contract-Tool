@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Query
 from typing import Optional, List
 from pydantic import BaseModel
 import logging
+from datetime import datetime
 
 from app.services.sam_gov import SAMGovService
 from app.services.contractor_service import ContractorService
@@ -16,6 +17,21 @@ router = APIRouter()
 # Initialize services
 sam_service = SAMGovService()
 contractor_service = ContractorService()
+
+# Helper function for calculating active years
+def calculate_active_years(start_date: Optional[str], end_date: Optional[str]) -> float:
+    """
+    Calculate years of activity for a contractor
+    """
+    if not start_date or not end_date:
+        return 0.0
+    
+    try:
+        start = datetime.fromisoformat(start_date.replace('Z', '+00:00') if 'Z' in start_date else start_date[:10])
+        end = datetime.fromisoformat(end_date.replace('Z', '+00:00') if 'Z' in end_date else end_date[:10])
+        return round((end - start).days / 365.25, 1)
+    except Exception:
+        return 0.0
 
 # Add backwards compatibility routes (without /contracts prefix)
 @router.get("/agencies", include_in_schema=False)
@@ -294,15 +310,16 @@ async def search_contractors(
     limit: int = 20
 ):
     """
-    Search for contractors/vendors with comprehensive pagination and data retrieval
+    Search for contractors/vendors using the CORRECT USASpending.gov API approach
     
-    This endpoint now uses proper pagination to retrieve complete datasets,
-    similar to what you see on USASpending.gov (e.g., 234 records for Planned Systems International)
+    This endpoint now uses the same 2-step process as USASpending.gov website:
+    1. Fast autocomplete for contractor discovery
+    2. Precise data retrieval using recipient_hash
     """
     try:
         logger.info(f"🔍 Contractor search request: name_query='{name_query}', limit={limit}")
         
-        # Use the new ContractorService with pagination
+        # Use the new ContractorService with correct API endpoints
         contractors = contractor_service.search_contractors(
             name_query=name_query,
             limit=limit
@@ -326,10 +343,9 @@ async def search_contractors(
 @router.get("/contractors/{contractor_name}/profile")
 async def get_contractor_profile(contractor_name: str):
     """
-    Get detailed profile for a specific contractor
+    Get detailed profile for a specific contractor using the FAST USASpending.gov approach
     
-    This endpoint retrieves comprehensive contractor data using pagination
-    to get complete award histories, similar to USASpending.gov's detailed views
+    This endpoint now uses the same method as the USASpending.gov website for fast, accurate results
     """
     try:
         logger.info(f"📊 Getting profile for contractor: {contractor_name}")
@@ -362,7 +378,7 @@ async def get_contractor_profile(contractor_name: str):
                     },
                     "performance_metrics": {
                         "avg_award_value": profile["total_value"] / max(profile["total_awards"], 1),
-                        "active_years": self._calculate_active_years(
+                        "active_years": calculate_active_years(
                             profile.get("first_award_date"),
                             profile.get("latest_award_date")
                         )
@@ -379,54 +395,34 @@ async def get_contractor_profile(contractor_name: str):
         logger.error(f"❌ Error getting contractor profile: {str(e)}")
         raise HTTPException(status_code=500, detail="Error retrieving contractor profile")
 
-def _calculate_active_years(start_date: Optional[str], end_date: Optional[str]) -> float:
-    """
-    Calculate years of activity for a contractor
-    """
-    if not start_date or not end_date:
-        return 0.0
-    
-    try:
-        from datetime import datetime
-        start = datetime.fromisoformat(start_date.replace('Z', '+00:00') if 'Z' in start_date else start_date[:10])
-        end = datetime.fromisoformat(end_date.replace('Z', '+00:00') if 'Z' in end_date else end_date[:10])
-        return round((end - start).days / 365.25, 1)
-    except Exception:
-        return 0.0
-
 @router.get("/contractors/test/{contractor_name}")
 async def test_contractor_search(contractor_name: str):
     """
-    Test endpoint to debug contractor search issues
+    Test endpoint to debug contractor search with the NEW correct API approach
     
-    Use this to test specific contractor searches and see detailed logging
+    This shows the 2-step process:
+    1. Autocomplete for fast contractor discovery
+    2. Detailed spending data retrieval
+    
     Example: /api/contractors/test/Planned%20Systems%20International
     """
     try:
-        logger.info(f"📧 TESTING contractor search for: {contractor_name}")
+        logger.info(f"🧪 TESTING contractor search for: {contractor_name}")
         
-        # Test the search with detailed logging
-        contractors = contractor_service.search_contractors(
-            name_query=contractor_name,
-            limit=5
-        )
+        # Test the search with the new approach
+        test_results = contractor_service.test_contractor_search(contractor_name)
         
-        return {
-            "test_query": contractor_name,
-            "contractors_found": len(contractors),
-            "contractors": contractors,
-            "message": f"Test completed for '{contractor_name}'",
-            "tip": "Check backend logs for detailed API call information"
-        }
+        return test_results
         
     except Exception as e:
         logger.error(f"❌ Test failed for {contractor_name}: {str(e)}")
         return {
             "test_query": contractor_name,
-            "contractors_found": 0,
-            "contractors": [],
+            "step_1_autocomplete": "ERROR",
+            "step_2_spending": "ERROR",
+            "final_result": "ERROR",
             "error": str(e),
-            "message": "Test failed - check backend logs for details"
+            "message": "Test failed - check backend logs for error details"
         }
 
 # Health check endpoint
