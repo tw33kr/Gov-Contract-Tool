@@ -443,7 +443,7 @@ async def export_awards(
             raise HTTPException(status_code=400, detail="Unsupported format. Use 'csv' or 'excel'")
             
     except Exception as e:
-        logger.error(f"❌ Error exporting awards: {str(e}\")")
+        logger.error(f"❌ Error exporting awards: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error exporting awards: {str(e)}")
 
 # Health check endpoint
