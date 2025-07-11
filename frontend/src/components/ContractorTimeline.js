@@ -94,7 +94,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
     }
   }, [timelineData, contractFilter]);
 
-  // Calculate dynamic time range based on filtered contracts with improved padding
+  // Calculate dynamic time range based ONLY on filtered contracts (no unnecessary padding)
   const timeRange = useMemo(() => {
     if (!filteredContracts || filteredContracts.length === 0) {
       const now = new Date();
@@ -112,34 +112,40 @@ const ContractorTimeline = ({ contractor, profile }) => {
     const minStart = new Date(Math.min(...startDates));
     const maxEnd = new Date(Math.max(...endDates));
     
-    // Calculate the span in years to determine appropriate granularity
+    // Calculate the actual contract span in years
     const contractYears = differenceInYears(maxEnd, minStart);
     
+    // CRITICAL FIX: Use minimal padding that doesn't extend beyond contract reality
     let startPadding, endPadding, duration;
     
-    // Improved dynamic scaling with minimal necessary padding
-    if (contractYears <= 3) {
-      // Short duration: monthly granularity with minimal padding
+    if (contractYears <= 2) {
+      // Very short duration: minimal padding
+      startPadding = 1; // 1 month before
+      endPadding = 1;   // 1 month after
+      duration = 'very-short';
+    } else if (contractYears <= 5) {
+      // Short duration: minimal padding
       startPadding = 2; // 2 months before
-      endPadding = 3;   // 3 months after
+      endPadding = 2;   // 2 months after
       duration = 'short';
-    } else if (contractYears <= 8) {
-      // Medium duration: quarterly granularity
+    } else if (contractYears <= 10) {
+      // Medium duration: moderate padding
       startPadding = 3; // 3 months before
-      endPadding = 6;   // 6 months after
+      endPadding = 3;   // 3 months after
       duration = 'medium';
     } else if (contractYears <= 20) {
-      // Long duration: yearly granularity
+      // Long duration: moderate padding
       startPadding = 6;  // 6 months before
       endPadding = 6;    // 6 months after
       duration = 'long';
     } else {
-      // Very long duration: multi-year granularity
-      startPadding = 12; // 12 months before
-      endPadding = 12;   // 12 months after
+      // Very long duration: minimal relative padding
+      startPadding = 6;  // 6 months before
+      endPadding = 6;    // 6 months after
       duration = 'very-long';
     }
     
+    // CRITICAL: Timeline should ONLY span the relevant contract period
     const paddedStart = subMonths(startOfMonth(minStart), startPadding);
     const paddedEnd = addMonths(endOfMonth(maxEnd), endPadding);
     
@@ -150,27 +156,26 @@ const ContractorTimeline = ({ contractor, profile }) => {
       totalYears: differenceInYears(paddedEnd, paddedStart),
       contractStart: minStart,
       contractEnd: maxEnd,
-      contractYears
+      contractYears, // Actual contract span without padding
+      actualRange: { start: minStart, end: maxEnd } // Track the true contract range
     };
   }, [filteredContracts, contractFilter]);
 
-  // Auto-determine optimal zoom level based on time range
+  // Auto-determine optimal zoom level based on ACTUAL contract time range
   const optimalZoomLevel = useMemo(() => {
     if (zoomLevel !== 'auto') return zoomLevel;
     
-    if (!timeRange.duration) return 'months';
+    if (!timeRange.contractYears) return 'months';
     
-    switch (timeRange.duration) {
-      case 'short':
-        return 'months';
-      case 'medium':
-        return 'quarters';
-      case 'long':
-        return 'years';
-      case 'very-long':
-        return 'decades'; // New scale for very long timelines
-      default:
-        return 'months';
+    // Base decision on actual contract span, not padded timeline
+    if (timeRange.contractYears <= 2) {
+      return 'months';
+    } else if (timeRange.contractYears <= 8) {
+      return 'quarters';
+    } else if (timeRange.contractYears <= 25) {
+      return 'years';
+    } else {
+      return 'decades';
     }
   }, [timeRange, zoomLevel]);
 
@@ -181,7 +186,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
     const allContracts = timelineData.timeline_contracts;
     const timelinePoints = [];
     
-    // Generate monthly data points
+    // Generate monthly data points ONLY within the relevant contract period
     let current = timeRange.start;
     while (current <= timeRange.end) {
       let activeRevenue = 0;
@@ -228,28 +233,35 @@ const ContractorTimeline = ({ contractor, profile }) => {
     return timelinePoints;
   }, [timelineData, timeRange]);
 
-  // Generate intelligent time scale for Gantt chart with full coverage
+  // CRITICAL FIX: Generate timeline scale that EXACTLY matches contract span
   const ganttTimeScale = useMemo(() => {
     if (!timeRange.start || !timeRange.end) return [];
     
     const scale = [];
-    let current = new Date(timeRange.start);
-    const totalDuration = differenceInDays(timeRange.end, timeRange.start);
     
-    // Determine step size based on total duration and zoom level
+    // Use the ACTUAL contract range for timeline generation, not the padded range
+    const timelineStart = timeRange.actualRange?.start || timeRange.start;
+    const timelineEnd = timeRange.actualRange?.end || timeRange.end;
+    
+    let current = new Date(timelineStart);
+    const totalDuration = differenceInDays(timelineEnd, timelineStart);
+    
+    // Determine step size based on ACTUAL contract duration and zoom level
     let stepFunction, formatFunction, stepSize;
     
     switch (optimalZoomLevel) {
       case 'months':
         stepFunction = addMonths;
-        stepSize = timeRange.totalYears > 5 ? Math.ceil(timeRange.totalYears / 3) : 1;
+        // For short periods, show every month; for longer periods, skip months
+        stepSize = timeRange.contractYears <= 3 ? 1 : Math.max(1, Math.ceil(timeRange.contractYears / 6));
         formatFunction = (date) => format(date, 'MMM yy');
         current = startOfMonth(current);
         break;
         
       case 'quarters':
         stepFunction = addQuarters;
-        stepSize = timeRange.totalYears <= 5 ? 1 : 2;
+        // Dynamic step sizing for quarters
+        stepSize = timeRange.contractYears <= 8 ? 1 : 2;
         formatFunction = (date) => {
           const quarter = Math.floor(date.getMonth() / 3) + 1;
           const seasonMap = { 1: 'Q1', 2: 'Q2', 3: 'Q3', 4: 'Q4' };
@@ -260,12 +272,13 @@ const ContractorTimeline = ({ contractor, profile }) => {
         
       case 'years':
         stepFunction = addYears;
-        if (timeRange.totalYears <= 15) {
-          stepSize = 1;
-        } else if (timeRange.totalYears <= 25) {
-          stepSize = 2;
+        // Smart year stepping based on total span
+        if (timeRange.contractYears <= 15) {
+          stepSize = 1; // Every year
+        } else if (timeRange.contractYears <= 30) {
+          stepSize = 2; // Every 2 years
         } else {
-          stepSize = 5;
+          stepSize = 5; // Every 5 years
         }
         formatFunction = (date) => format(date, 'yyyy');
         current = startOfYear(current);
@@ -273,7 +286,8 @@ const ContractorTimeline = ({ contractor, profile }) => {
         
       case 'decades':
         stepFunction = addYears;
-        stepSize = Math.max(2, Math.floor(timeRange.totalYears / 10)); // Ensure we have at least 10 markers
+        // For very long spans, use larger year steps
+        stepSize = Math.max(3, Math.ceil(timeRange.contractYears / 8));
         formatFunction = (date) => format(date, 'yyyy');
         current = startOfYear(current);
         break;
@@ -285,43 +299,40 @@ const ContractorTimeline = ({ contractor, profile }) => {
         current = startOfMonth(current);
     }
     
-    // Generate scale points with proper positioning relative to timeline
-    // Ensure we have enough markers to cover the full timeline
-    const minMarkers = 6;  // Minimum number of markers
-    const maxMarkers = optimalZoomLevel === 'decades' ? 12 : 
-                      (optimalZoomLevel === 'years' ? 15 : 
-                      (optimalZoomLevel === 'quarters' ? 12 : 25));
-    
+    // Generate scale points that ONLY cover the actual contract period
+    const maxMarkers = 12; // Reasonable maximum to prevent overcrowding
     let markerCount = 0;
     
-    // Generate markers that span the full timeline
-    while (current <= timeRange.end && markerCount < maxMarkers) {
-      // Calculate the exact position of this marker relative to timeline start
-      const daysFromStart = differenceInDays(current, timeRange.start);
-      const positionPercent = totalDuration > 0 ? (daysFromStart / totalDuration) * 100 : 0;
+    // Start from the actual first contract date
+    while (current <= timelineEnd && markerCount < maxMarkers) {
+      // Calculate position relative to the TOTAL timeline range (including padding)
+      const daysFromTimelineStart = differenceInDays(current, timeRange.start);
+      const totalTimelineDuration = differenceInDays(timeRange.end, timeRange.start);
+      const positionPercent = totalTimelineDuration > 0 ? (daysFromTimelineStart / totalTimelineDuration) * 100 : 0;
       
       scale.push({
         date: new Date(current),
         label: formatFunction(current),
-        position: Math.max(0, Math.min(100, positionPercent)) // Ensure position is within 0-100%
+        position: Math.max(0, Math.min(100, positionPercent))
       });
       
       current = stepFunction(current, stepSize);
       markerCount++;
     }
     
-    // Ensure we have the final marker if we're close to the end
-    if (scale.length > 0 && scale.length >= minMarkers) {
+    // CRITICAL: Ensure the final marker aligns with the last contract end date
+    if (scale.length > 0) {
       const lastMarker = scale[scale.length - 1];
-      const endPosition = 100;
-      const lastPosition = lastMarker.position;
+      const endDaysFromStart = differenceInDays(timelineEnd, timeRange.start);
+      const totalTimelineDuration = differenceInDays(timeRange.end, timeRange.start);
+      const endPosition = totalTimelineDuration > 0 ? (endDaysFromStart / totalTimelineDuration) * 100 : 100;
       
-      // If the last marker is significantly before the end, add an end marker
-      if (endPosition - lastPosition > 10) {
+      // If the last marker doesn't reach the end of contracts, add end marker
+      if (endPosition - lastMarker.position > 5) {
         scale.push({
-          date: new Date(timeRange.end),
-          label: formatFunction(timeRange.end),
-          position: 100
+          date: new Date(timelineEnd),
+          label: formatFunction(timelineEnd),
+          position: Math.max(0, Math.min(100, endPosition))
         });
       }
     }
@@ -618,7 +629,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
           </div>
         </div>
 
-        {/* Enhanced Timeline Info with Clearer Scaling Information */}
+        {/* IMPROVED Timeline Info with Contract-Focused Scaling */}
         <div className="mt-4 p-3 bg-blue-50 rounded-lg">
           <div className="text-sm text-blue-800">
             <strong>Current View:</strong> {
@@ -629,15 +640,15 @@ const ContractorTimeline = ({ contractor, profile }) => {
                 `Showing all ${summaryStats.totalContracts} contracts in history`
             }
             <span className="ml-2">
-              (Timeline: {format(timeRange.start, 'MMM yyyy')} - {format(timeRange.end, 'MMM yyyy')})
+              (Contract Period: {format(timeRange.actualRange?.start || timeRange.start, 'MMM yyyy')} - {format(timeRange.actualRange?.end || timeRange.end, 'MMM yyyy')})
             </span>
             <span className="ml-2 font-medium">
               | Scale: {
-                optimalZoomLevel === 'decades' ? `Multi-Year (${ganttTimeScale.length > 0 ? Math.round(timeRange.totalYears / ganttTimeScale.length) : 5}-year intervals)` :
-                optimalZoomLevel === 'years' ? `Yearly` :
-                optimalZoomLevel === 'quarters' ? `Quarterly (${timeRange.totalYears <= 5 ? 'every quarter' : 'every 2 quarters'})` : 
-                `Monthly`
-              } ({timeRange.contractYears} year contract span + padding)
+                optimalZoomLevel === 'decades' ? `Multi-Year (optimized for ${timeRange.contractYears}+ year span)` :
+                optimalZoomLevel === 'years' ? `Yearly (${ganttTimeScale.length} markers)` :
+                optimalZoomLevel === 'quarters' ? `Quarterly (${ganttTimeScale.length} markers)` : 
+                `Monthly (${ganttTimeScale.length} markers)`
+              } - Timeline aligned to actual contract dates
             </span>
           </div>
         </div>
@@ -765,10 +776,10 @@ const ContractorTimeline = ({ contractor, profile }) => {
             </div>
           </div>
         ) : viewMode === 'gantt' ? (
-          // IMPROVED Gantt Chart View with full timeline coverage
+          // FIXED Gantt Chart View with contract-aligned timeline
           <div className="p-6">
             <h3 className="text-lg font-medium text-gray-900 mb-6">
-              📋 Contract Portfolio Gantt Chart - Optimized Timeline Coverage
+              📋 Contract Portfolio Gantt Chart - Contract-Aligned Timeline
               {contractFilter === 'active' && <span className="text-sm text-green-600 ml-2">(Active Contracts Only)</span>}
               {contractFilter === 'ending-soon' && <span className="text-sm text-orange-600 ml-2">(Contracts Ending Within 1 Year)</span>}
               <span className="text-sm text-purple-600 ml-2">
@@ -784,7 +795,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
               </div>
             ) : (
               <>
-                {/* Improved Time Scale Header with full timeline coverage */}
+                {/* FIXED Time Scale Header - aligned to actual contract dates */}
                 <div className="mb-4 border-b border-gray-200 pb-2 bg-gray-50 rounded-t-lg">
                   <div className="text-xs text-gray-500 font-medium relative h-12 flex items-end">
                     <div className="w-64 flex-shrink-0 text-center border-r border-gray-300 py-2">
@@ -792,7 +803,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
                     </div>
                     <div className="flex-1 relative px-2">
                       <div className="text-center mb-1 text-gray-700 font-semibold">
-                        Contract Timeline: {format(timeRange.contractStart, 'MMM yyyy')} - {format(timeRange.contractEnd, 'MMM yyyy')} 
+                        Contract Timeline: {format(timeRange.actualRange?.start || timeRange.start, 'MMM yyyy')} - {format(timeRange.actualRange?.end || timeRange.end, 'MMM yyyy')} 
                         ({optimalZoomLevel === 'decades' ? 'Multi-Year' : 
                           optimalZoomLevel.charAt(0).toUpperCase() + optimalZoomLevel.slice(1)} Scale)
                       </div>
@@ -873,7 +884,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
                   })}
                 </div>
 
-                {/* Enhanced Legend with timeline scale information */}
+                {/* Enhanced Legend with contract-focused information */}
                 <div className="mt-6 space-y-3">
                   <div className="flex flex-wrap gap-4 text-sm">
                     <div className="flex items-center space-x-2">
@@ -893,16 +904,16 @@ const ContractorTimeline = ({ contractor, profile }) => {
                   </div>
                   
                   <div className="text-sm text-gray-600 bg-gray-50 p-3 rounded-lg">
-                    <strong>Optimized Timeline Coverage:</strong> Timeline now spans the full contract duration range with minimal padding, ensuring all contract bars are properly positioned within the visible timeline. {
+                    <strong>Contract-Aligned Timeline:</strong> Timeline markers now span only the actual contract performance period ({format(timeRange.actualRange?.start || timeRange.start, 'MMM yyyy')} to {format(timeRange.actualRange?.end || timeRange.end, 'MMM yyyy')}), eliminating unnecessary years and maximizing readability. {
                       optimalZoomLevel === 'months' ? 
-                        `Monthly scale provides precise alignment for short-term analysis (${timeRange.contractYears} year span)` :
+                        `Monthly markers for precise short-term analysis` :
                       optimalZoomLevel === 'quarters' ?
-                        `Quarterly scale with ${timeRange.totalYears <= 5 ? 'detailed' : 'optimized'} markers for medium-term analysis (${timeRange.contractYears} year span)` :
+                        `Quarterly markers optimized for medium-term planning` :
                       optimalZoomLevel === 'years' ?
-                        `Yearly scale optimized for long-term historical analysis (${timeRange.contractYears} year span)` :
-                        `Multi-year scale for comprehensive historical overview (${timeRange.contractYears} year span)`
+                        `Yearly markers for long-term strategic analysis` :
+                        `Multi-year markers for comprehensive historical overview`
                     }
-                    {ganttTimeScale.length > 0 && ` | ${ganttTimeScale.length} timeline markers covering full range`}
+                    {ganttTimeScale.length > 0 && ` | ${ganttTimeScale.length} markers covering {timeRange.contractYears} year contract span`}
                   </div>
                 </div>
                 
@@ -998,8 +1009,8 @@ const ContractorTimeline = ({ contractor, profile }) => {
             with {summaryStats.maxContracts} simultaneous contracts.
           </p>
           <p>
-            <strong>Timeline Optimization:</strong> Gantt chart now displays optimized timeline coverage with minimal padding, 
-            ensuring all contract bars are properly positioned within the visible scale for accurate temporal analysis.
+            <strong>Timeline Accuracy:</strong> Gantt chart timeline now aligns precisely with actual contract dates, 
+            eliminating unnecessary years and providing focused analysis of the {timeRange.contractYears}-year contracting period.
           </p>
         </div>
       </div>
