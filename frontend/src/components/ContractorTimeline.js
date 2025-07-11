@@ -1,14 +1,13 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { format, parseISO, differenceInDays, startOfMonth, endOfMonth, addMonths, subMonths, isAfter, isBefore } from 'date-fns';
+import { format, parseISO, differenceInDays, startOfMonth, endOfMonth, addMonths, subMonths, isAfter, isBefore, addDays } from 'date-fns';
 
 const ContractorTimeline = ({ contractor, profile }) => {
   const [viewMode, setViewMode] = useState('revenue-timeline'); // 'revenue-timeline', 'gantt', 'list'
-  const [contractFilter, setContractFilter] = useState('active'); // 'active', 'all'
+  const [contractFilter, setContractFilter] = useState('active'); // 'active', 'all', 'ending-soon'
   const [sortBy, setSortBy] = useState('start_date');
   const [timelineData, setTimelineData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [timeRange, setTimeRange] = useState({ start: null, end: null });
   const [zoomLevel, setZoomLevel] = useState('months'); // 'months', 'quarters', 'years'
 
   // Safely extract data from our API response structure
@@ -29,21 +28,6 @@ const ContractorTimeline = ({ contractor, profile }) => {
       
       const data = await response.json();
       setTimelineData(data);
-      
-      // Calculate time range from contracts
-      if (data.timeline_contracts && data.timeline_contracts.length > 0) {
-        const startDates = data.timeline_contracts.map(c => new Date(c.start_date));
-        const endDates = data.timeline_contracts.map(c => new Date(c.end_date));
-        
-        const minStart = new Date(Math.min(...startDates));
-        const maxEnd = new Date(Math.max(...endDates));
-        
-        // Add some padding to the range
-        setTimeRange({
-          start: subMonths(startOfMonth(minStart), 6),
-          end: addMonths(endOfMonth(maxEnd), 12) // Extend for future projections
-        });
-      }
       
     } catch (err) {
       console.error('Error fetching timeline data:', err);
@@ -85,18 +69,74 @@ const ContractorTimeline = ({ contractor, profile }) => {
     return isAfter(endDate, now);
   };
 
+  // Check if contract is ending soon (within 1 year)
+  const isContractEndingSoon = (contract) => {
+    const now = new Date();
+    const endDate = new Date(contract.end_date);
+    const oneYearFromNow = addDays(now, 365);
+    return isAfter(endDate, now) && isBefore(endDate, oneYearFromNow);
+  };
+
   // Filter contracts based on user selection
   const filteredContracts = useMemo(() => {
     if (!timelineData?.timeline_contracts) return [];
     
     const contracts = timelineData.timeline_contracts;
     
-    if (contractFilter === 'active') {
-      return contracts.filter(contract => isContractActive(contract));
+    switch (contractFilter) {
+      case 'active':
+        return contracts.filter(contract => isContractActive(contract));
+      case 'ending-soon':
+        return contracts.filter(contract => isContractEndingSoon(contract));
+      case 'all':
+      default:
+        return contracts;
+    }
+  }, [timelineData, contractFilter]);
+
+  // Calculate dynamic time range based on filtered contracts
+  const timeRange = useMemo(() => {
+    if (!filteredContracts || filteredContracts.length === 0) {
+      const now = new Date();
+      return {
+        start: subMonths(startOfMonth(now), 6),
+        end: addMonths(endOfMonth(now), 6)
+      };
+    }
+
+    const startDates = filteredContracts.map(c => new Date(c.start_date));
+    const endDates = filteredContracts.map(c => new Date(c.end_date));
+    
+    const minStart = new Date(Math.min(...startDates));
+    const maxEnd = new Date(Math.max(...endDates));
+    
+    // Add minimal padding based on filter type
+    let startPadding, endPadding;
+    
+    switch (contractFilter) {
+      case 'active':
+        // For active contracts, start from earliest start date with minimal padding
+        startPadding = 3; // 3 months before
+        endPadding = 6;   // 6 months after for recompete visibility
+        break;
+      case 'ending-soon':
+        // For ending soon, focus on current timeframe
+        startPadding = 6; // 6 months before  
+        endPadding = 12;  // 12 months after
+        break;
+      case 'all':
+      default:
+        // For all contracts, include full range with some padding
+        startPadding = 6;
+        endPadding = 6;
+        break;
     }
     
-    return contracts; // Return all contracts
-  }, [timelineData, contractFilter]);
+    return {
+      start: subMonths(startOfMonth(minStart), startPadding),
+      end: addMonths(endOfMonth(maxEnd), endPadding)
+    };
+  }, [filteredContracts, contractFilter]);
 
   // Generate revenue timeline data for the area chart
   const revenueTimelineData = useMemo(() => {
@@ -152,8 +192,8 @@ const ContractorTimeline = ({ contractor, profile }) => {
     return timelinePoints;
   }, [timelineData, timeRange]);
 
-  // Generate time scale for charts
-  const timeScale = useMemo(() => {
+  // Generate time scale for Gantt chart based on filtered time range
+  const ganttTimeScale = useMemo(() => {
     if (!timeRange.start || !timeRange.end) return [];
     
     const scale = [];
@@ -186,12 +226,31 @@ const ContractorTimeline = ({ contractor, profile }) => {
     
     const contracts = timelineData.timeline_contracts;
     const activeContracts = contracts.filter(isContractActive);
-    const now = new Date();
+    const endingSoonContracts = contracts.filter(isContractEndingSoon);
     
     const activeValue = activeContracts.reduce((sum, contract) => sum + (contract.amount || 0), 0);
     const totalValue = contracts.reduce((sum, contract) => sum + (contract.amount || 0), 0);
     
     // Find peak and valley periods from revenue timeline data
+    if (revenueTimelineData.length === 0) {
+      return {
+        activeContracts: activeContracts.length,
+        totalContracts: contracts.length,
+        activeValue,
+        totalValue,
+        completedContracts: contracts.length - activeContracts.length,
+        endingSoonContracts: endingSoonContracts.length,
+        peakPeriod: 'N/A',
+        valleyPeriod: 'N/A',
+        peakRevenue: 0,
+        valleyRevenue: 0,
+        peakContractPeriod: 'N/A',
+        valleyContractPeriod: 'N/A',
+        maxContracts: 0,
+        minContracts: 0
+      };
+    }
+    
     const maxRevenue = Math.max(...revenueTimelineData.map(point => point.totalRevenue));
     const minRevenue = Math.min(...revenueTimelineData.map(point => point.totalRevenue));
     
@@ -211,6 +270,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
       activeValue,
       totalValue,
       completedContracts: contracts.length - activeContracts.length,
+      endingSoonContracts: endingSoonContracts.length,
       peakPeriod: peakPeriod ? format(peakPeriod.date, 'MMM yyyy') : 'N/A',
       valleyPeriod: valleyPeriod ? format(valleyPeriod.date, 'MMM yyyy') : 'N/A',
       peakRevenue: maxRevenue,
@@ -222,16 +282,24 @@ const ContractorTimeline = ({ contractor, profile }) => {
     };
   }, [timelineData, revenueTimelineData]);
 
-  // Calculate Gantt position for contracts
+  // Calculate Gantt position for contracts - FIXED ALIGNMENT
   const calculateGanttPosition = (startDate, endDate) => {
     if (!timeRange.start || !timeRange.end) return { left: 0, width: 0 };
     
-    const totalDuration = differenceInDays(timeRange.end, timeRange.start);
-    const startOffset = differenceInDays(parseISO(startDate), timeRange.start);
-    const duration = differenceInDays(parseISO(endDate), parseISO(startDate));
+    const rangeStart = timeRange.start;
+    const rangeEnd = timeRange.end;
+    const totalDuration = differenceInDays(rangeEnd, rangeStart);
     
-    const leftPercent = Math.max(0, (startOffset / totalDuration) * 100);
-    const widthPercent = Math.min(100 - leftPercent, (duration / totalDuration) * 100);
+    const contractStartDate = parseISO(startDate);
+    const contractEndDate = parseISO(endDate);
+    
+    // Calculate position relative to the filtered time range
+    const startOffset = differenceInDays(contractStartDate, rangeStart);
+    const duration = differenceInDays(contractEndDate, contractStartDate);
+    
+    // Ensure positions are within bounds
+    const leftPercent = Math.max(0, Math.min(100, (startOffset / totalDuration) * 100));
+    const widthPercent = Math.max(0, Math.min(100 - leftPercent, (duration / totalDuration) * 100));
     
     return {
       left: `${leftPercent}%`,
@@ -253,6 +321,8 @@ const ContractorTimeline = ({ contractor, profile }) => {
     if (!data || data.length === 0) return '';
     
     const maxValue = Math.max(...data.map(d => d.totalRevenue));
+    if (maxValue === 0) return '';
+    
     const xStep = width / (data.length - 1);
     
     let path = `M 0 ${height}`;
@@ -345,6 +415,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
               className="px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
             >
               <option value="active">Active Contracts Only</option>
+              <option value="ending-soon">Contracts Ending Within 1 Year</option>
               <option value="all">All Contract History</option>
             </select>
             
@@ -415,9 +486,9 @@ const ContractorTimeline = ({ contractor, profile }) => {
           </div>
           <div className="text-center p-4 bg-orange-50 rounded-lg">
             <div className="text-lg font-bold text-orange-600">
-              {summaryStats.peakContractPeriod}
+              {summaryStats.endingSoonContracts || 0}
             </div>
-            <div className="text-sm text-orange-800">Peak Contracts ({summaryStats.maxContracts})</div>
+            <div className="text-sm text-orange-800">Ending Within 1 Year</div>
           </div>
           <div className="text-center p-4 bg-red-50 rounded-lg">
             <div className="text-lg font-bold text-red-600">
@@ -438,10 +509,16 @@ const ContractorTimeline = ({ contractor, profile }) => {
         {/* Contract Filter Info */}
         <div className="mt-4 p-3 bg-blue-50 rounded-lg">
           <div className="text-sm text-blue-800">
-            <strong>Current View:</strong> {contractFilter === 'active' ? 
-              `Showing ${summaryStats.activeContracts} active contracts (${summaryStats.completedContracts} completed contracts hidden)` :
-              `Showing all ${summaryStats.totalContracts} contracts in history`
+            <strong>Current View:</strong> {
+              contractFilter === 'active' ? 
+                `Showing ${summaryStats.activeContracts} active contracts` :
+              contractFilter === 'ending-soon' ?
+                `Showing ${summaryStats.endingSoonContracts} contracts ending within 1 year` :
+                `Showing all ${summaryStats.totalContracts} contracts in history`
             }
+            <span className="ml-2">
+              (Timeline: {format(timeRange.start, 'MMM yyyy')} - {format(timeRange.end, 'MMM yyyy')})
+            </span>
           </div>
         </div>
       </div>
@@ -568,97 +645,118 @@ const ContractorTimeline = ({ contractor, profile }) => {
             </div>
           </div>
         ) : viewMode === 'gantt' ? (
-          // Gantt Chart View (Enhanced to exclude completed contracts when in active mode)
+          // FIXED Gantt Chart View with proper alignment
           <div className="p-6">
             <h3 className="text-lg font-medium text-gray-900 mb-6">
               📋 Contract Portfolio Gantt Chart
               {contractFilter === 'active' && <span className="text-sm text-green-600 ml-2">(Active Contracts Only)</span>}
+              {contractFilter === 'ending-soon' && <span className="text-sm text-orange-600 ml-2">(Contracts Ending Within 1 Year)</span>}
             </h3>
             
-            {/* Time Scale Header */}
-            <div className="mb-4 border-b border-gray-200 pb-2">
-              <div className="flex text-xs text-gray-500 font-medium">
-                {timeScale.map((date, index) => (
-                  <div 
-                    key={index}
-                    className="flex-1 text-center border-r border-gray-100 last:border-r-0 px-1"
-                    style={{ minWidth: '60px' }}
-                  >
-                    {zoomLevel === 'months' && format(date, 'MMM yyyy')}
-                    {zoomLevel === 'quarters' && format(date, 'QQQ yyyy')}
-                    {zoomLevel === 'years' && format(date, 'yyyy')}
-                  </div>
-                ))}
+            {sortedContracts.length === 0 ? (
+              <div className="text-center text-gray-500 py-8">
+                <div className="text-4xl mb-4">📅</div>
+                <p>No contracts found for the selected filter criteria.</p>
               </div>
-            </div>
-
-            {/* Contract Gantt Bars */}
-            <div className="space-y-2 relative" style={{ minHeight: '300px' }}>
-              {sortedContracts.slice(0, 20).map((contract, index) => {
-                const position = calculateGanttPosition(contract.start_date, contract.end_date);
-                const color = getStatusColor(contract);
-                
-                return (
-                  <div key={contract.id || index} className="relative h-8 border-b border-gray-100 last:border-b-0">
-                    {/* Contract Label */}
-                    <div className="absolute left-0 top-0 w-64 h-8 flex items-center px-3 bg-gray-50 border-r border-gray-200 z-10">
-                      <div className="truncate">
-                        <div className="text-xs font-medium text-gray-900 truncate">
-                          {contract.title || contract.id}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          {formatCurrency(contract.amount)}
-                        </div>
-                      </div>
-                    </div>
-                    
-                    {/* Gantt Bar */}
-                    <div className="absolute left-64 top-0 right-0 h-8 flex items-center">
-                      <div className="relative w-full h-full">
-                        <div
-                          className="absolute rounded-md shadow-sm border border-white flex items-center px-2 text-white text-xs font-medium overflow-hidden"
-                          style={{
-                            left: position.left,
-                            width: position.width,
-                            height: '24px',
-                            backgroundColor: color,
-                            top: '2px'
-                          }}
-                          title={`${contract.title}\n${formatDate(contract.start_date)} - ${formatDate(contract.end_date)}\n${formatCurrency(contract.amount)}`}
-                        >
-                          <span className="truncate text-xs">
-                            {format(parseISO(contract.start_date), 'MMM yy')} - {format(parseISO(contract.end_date), 'MMM yy')}
-                          </span>
-                        </div>
-                      </div>
+            ) : (
+              <>
+                {/* Time Scale Header - FIXED to align with contract bars */}
+                <div className="mb-4 border-b border-gray-200 pb-2">
+                  <div className="flex text-xs text-gray-500 font-medium relative">
+                    <div className="w-64 flex-shrink-0"></div> {/* Space for contract labels */}
+                    <div className="flex-1 flex">
+                      {ganttTimeScale.map((date, index) => {
+                        const position = ((index / (ganttTimeScale.length - 1)) * 100);
+                        return (
+                          <div 
+                            key={index}
+                            className="absolute text-center"
+                            style={{ 
+                              left: `${position}%`,
+                              transform: 'translateX(-50%)',
+                              minWidth: '60px'
+                            }}
+                          >
+                            {zoomLevel === 'months' && format(date, 'MMM yyyy')}
+                            {zoomLevel === 'quarters' && format(date, 'QQQ yyyy')}
+                            {zoomLevel === 'years' && format(date, 'yyyy')}
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
-                );
-              })}
-            </div>
-
-            {/* Legend */}
-            <div className="mt-6 flex flex-wrap gap-4 text-sm">
-              <div className="flex items-center space-x-2">
-                <div className="w-4 h-4 bg-emerald-500 rounded"></div>
-                <span>Active Contracts</span>
-              </div>
-              <div className="flex items-center space-x-2">
-                <div className="w-4 h-4 bg-orange-500 rounded"></div>
-                <span>Ending Soon (&lt;3 months)</span>
-              </div>
-              {contractFilter === 'all' && (
-                <div className="flex items-center space-x-2">
-                  <div className="w-4 h-4 bg-gray-400 rounded"></div>
-                  <span>Completed</span>
                 </div>
-              )}
-            </div>
-            
-            {sortedContracts.length > 20 && (
-              <div className="mt-4 text-sm text-gray-600 text-center">
-                Showing first 20 contracts. Switch to Contract List view to see all {sortedContracts.length} contracts.
-              </div>
+
+                {/* Contract Gantt Bars - FIXED positioning */}
+                <div className="space-y-2 relative" style={{ minHeight: Math.max(300, sortedContracts.length * 40) }}>
+                  {sortedContracts.slice(0, 50).map((contract, index) => {
+                    const position = calculateGanttPosition(contract.start_date, contract.end_date);
+                    const color = getStatusColor(contract);
+                    
+                    return (
+                      <div key={contract.id || index} className="relative h-8 border-b border-gray-100 last:border-b-0">
+                        {/* Contract Label */}
+                        <div className="absolute left-0 top-0 w-64 h-8 flex items-center px-3 bg-gray-50 border-r border-gray-200 z-10">
+                          <div className="truncate">
+                            <div className="text-xs font-medium text-gray-900 truncate">
+                              {contract.title || contract.id}
+                            </div>
+                            <div className="text-xs text-gray-500">
+                              {formatCurrency(contract.amount)}
+                            </div>
+                          </div>
+                        </div>
+                        
+                        {/* Gantt Bar - FIXED to align with time scale */}
+                        <div className="absolute left-64 top-0 right-0 h-8 flex items-center">
+                          <div className="relative w-full h-full">
+                            <div
+                              className="absolute rounded-md shadow-sm border border-white flex items-center px-2 text-white text-xs font-medium overflow-hidden"
+                              style={{
+                                left: position.left,
+                                width: position.width,
+                                height: '24px',
+                                backgroundColor: color,
+                                top: '2px',
+                                minWidth: '2px' // Ensure very short contracts are visible
+                              }}
+                              title={`${contract.title}\n${formatDate(contract.start_date)} - ${formatDate(contract.end_date)}\n${formatCurrency(contract.amount)}`}
+                            >
+                              <span className="truncate text-xs">
+                                {format(parseISO(contract.start_date), 'MMM yy')} - {format(parseISO(contract.end_date), 'MMM yy')}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Legend */}
+                <div className="mt-6 flex flex-wrap gap-4 text-sm">
+                  <div className="flex items-center space-x-2">
+                    <div className="w-4 h-4 bg-emerald-500 rounded"></div>
+                    <span>Active Contracts</span>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <div className="w-4 h-4 bg-orange-500 rounded"></div>
+                    <span>Ending Soon (&lt;3 months)</span>
+                  </div>
+                  {contractFilter === 'all' && (
+                    <div className="flex items-center space-x-2">
+                      <div className="w-4 h-4 bg-gray-400 rounded"></div>
+                      <span>Completed</span>
+                    </div>
+                  )}
+                </div>
+                
+                {sortedContracts.length > 50 && (
+                  <div className="mt-4 text-sm text-gray-600 text-center">
+                    Showing first 50 contracts. Switch to Contract List view to see all {sortedContracts.length} contracts.
+                  </div>
+                )}
+              </>
             )}
           </div>
         ) : (
@@ -669,7 +767,9 @@ const ContractorTimeline = ({ contractor, profile }) => {
                 Contract Portfolio ({sortedContracts.length})
               </h3>
               <p className="text-sm text-gray-600 mt-1">
-                {contractFilter === 'active' ? 'Active contracts only' : 'Complete contract history'}
+                {contractFilter === 'active' ? 'Active contracts only' : 
+                 contractFilter === 'ending-soon' ? 'Contracts ending within 1 year' :
+                 'Complete contract history'}
               </p>
             </div>
             
@@ -744,6 +844,8 @@ const ContractorTimeline = ({ contractor, profile }) => {
           <p>
             <strong>Strategic Insight:</strong> {contractFilter === 'active' ? 
               'Active contracts view shows current capacity and near-term recompete schedule for revenue projections.' :
+              contractFilter === 'ending-soon' ?
+              'Ending soon view focuses on upcoming recompete opportunities and transition planning.' :
               'Historical view reveals growth patterns, business cycles, and competitive positioning over time.'
             }
           </p>
