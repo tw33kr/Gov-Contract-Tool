@@ -5,6 +5,173 @@ All notable changes to the Federal Contract Research Tool will be documented in 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2025-07-11] - 16:30 UTC
+
+### Fixed - Gantt Chart Dynamic Scaling for Multi-Decade Contractor Histories
+
+**Developer**: Claude (Anthropic)  
+**Fix Type**: CRITICAL TIMELINE SCALING IMPROVEMENT  
+**Issue Resolved**: Gantt chart scaling doesn't work for contractors with decades of contracting history
+
+#### 🎯 Problem Solved
+User reported that for contractors with extensive contracting history spanning decades (like Planned Systems International), the Gantt chart timeline became unreadable with overlapping year/month labels and contract dates having no relation to the timeline markers shown at the top.
+
+#### 🚀 Dynamic Scaling Implementation
+
+**1. Intelligent Time Range Detection**
+- **Smart Duration Analysis**: Automatically calculates total time span in years for filtered contracts
+- **Three-Tier Classification**:
+  - **Short (≤3 years)**: Monthly granularity for detailed analysis
+  - **Medium (3-8 years)**: Quarterly granularity for balanced perspective  
+  - **Long (8+ years)**: Yearly granularity for broad overview
+- **Dynamic Padding**: Adjusts timeline padding based on duration category
+
+**2. Auto-Scaling Timeline Granularity**
+```javascript
+// Dynamic scaling logic
+if (totalYears <= 3) {
+  duration = 'short';    // Monthly markers
+  formatFunction = (date) => format(date, 'MMM yy');
+} else if (totalYears <= 8) {
+  duration = 'medium';   // Quarterly markers  
+  formatFunction = (date) => format(date, 'QQQ yyyy');
+} else {
+  duration = 'long';     // Yearly markers
+  formatFunction = (date) => format(date, 'yyyy');
+}
+```
+
+**3. Enhanced Time Scale Generation**
+- **Maximum Marker Limits**: Prevents overcrowding with sensible marker counts
+  - Years view: Max 12 markers
+  - Quarters view: Max 20 markers
+  - Months view: Max 24 markers
+- **Intelligent Step Sizing**: Adjusts marker frequency for very long spans
+- **Proper Alignment**: Timeline markers now align perfectly with contract bars
+
+**4. Improved User Experience**
+- **Auto Scale Option**: New "Auto Scale" dropdown option that shows current selection
+- **Scale Indicators**: Clear labeling shows which scale is being used (Monthly/Quarterly/Yearly)
+- **Timeline Information**: Displays total year span and number of markers
+- **Filter-Responsive Scaling**: Timeline adapts when switching between active/all/ending-soon contracts
+
+#### 📊 Technical Implementation Details
+
+**Dynamic Time Range Calculation**:
+```javascript
+const timeRange = useMemo(() => {
+  const totalYears = differenceInYears(maxEnd, minStart);
+  
+  // Dynamic scaling based on total time span
+  if (totalYears <= 3) {
+    startPadding = 3; endPadding = 6; duration = 'short';
+  } else if (totalYears <= 8) {
+    startPadding = 6; endPadding = 12; duration = 'medium';
+  } else {
+    startPadding = 12; endPadding = 12; duration = 'long';
+  }
+  
+  return {
+    start: subMonths(startOfMonth(minStart), startPadding),
+    end: addMonths(endOfMonth(maxEnd), endPadding),
+    duration,
+    totalYears: totalYears + Math.ceil((startPadding + endPadding) / 12)
+  };
+}, [filteredContracts, contractFilter]);
+```
+
+**Intelligent Scale Generation**:
+```javascript
+const ganttTimeScale = useMemo(() => {
+  let stepFunction, formatFunction, stepSize;
+  
+  switch (optimalZoomLevel) {
+    case 'months':
+      stepFunction = addMonths;
+      stepSize = totalYears > 5 ? Math.ceil(totalYears / 3) : 1;
+      break;
+    case 'quarters':
+      stepFunction = addQuarters;
+      stepSize = 1;
+      break;
+    case 'years':
+      stepFunction = addYears;
+      stepSize = Math.max(1, Math.floor(totalYears / 12));
+      break;
+  }
+  
+  // Generate markers with proper spacing limits
+  const maxMarkers = optimalZoomLevel === 'years' ? 12 : 
+                    (optimalZoomLevel === 'quarters' ? 20 : 24);
+}, [timeRange, optimalZoomLevel]);
+```
+
+#### 🎯 Key Benefits Delivered
+
+**For Short Timeline Contractors (≤3 years)**:
+- Monthly granularity provides detailed project timeline analysis
+- Precise contract overlap visualization
+- Optimal for detailed recompete planning
+
+**For Medium Timeline Contractors (3-8 years)**:
+- Quarterly granularity balances detail with readability
+- Clear seasonal and yearly patterns visible
+- Good for medium-term strategic analysis
+
+**For Long Timeline Contractors (8+ years)**:
+- Yearly granularity optimizes readability across decades
+- Broad perspective on contractor growth and market presence
+- No more overlapping labels or unreadable timelines
+- Perfect for historical analysis and trend identification
+
+**Universal Improvements**:
+- ✅ **Perfect Alignment**: Contract bars now align precisely with timeline markers
+- ✅ **No Overlapping Labels**: Intelligent spacing prevents text collision
+- ✅ **Scalable Performance**: Optimized for both 5-year and 30+ year histories
+- ✅ **User Control**: Manual override available via zoom level selector
+- ✅ **Context Awareness**: Timeline info shows current scale and reasoning
+
+#### 📋 User Interface Enhancements
+
+**Enhanced Controls**:
+- Updated zoom level selector with "Auto Scale" option showing current selection
+- Scale information displayed in timeline info banner
+- Dynamic scaling explanation in Business Intelligence Summary
+
+**Visual Improvements**:
+- Timeline header shows scale type and date range
+- Proper spacing for different granularities
+- Time markers positioned with percentage-based calculations for precision
+- Responsive design works across different screen sizes
+
+#### 🧪 Testing Scenarios
+
+**Validation Cases**:
+1. **Short History Contractor**: 2-3 years of contracts → Monthly view
+2. **Medium History Contractor**: 5-7 years of contracts → Quarterly view  
+3. **Long History Contractor**: 15+ years like Planned Systems International → Yearly view
+4. **Filter Changes**: Switching between Active/All/Ending Soon adapts timeline appropriately
+5. **Manual Override**: User can still select specific zoom levels if desired
+
+#### 🎉 Issue Resolution
+
+**Before Fix**:
+- ❌ Gantt chart timeline exceeded formatted area
+- ❌ Years and months overlapped making timeline unreadable
+- ❌ Contract start/end dates had no relation to timeline markers
+- ❌ Decades-spanning contractors unusable
+
+**After Fix**:
+- ✅ **Dynamic scaling based on contract selection criteria**
+- ✅ **Intelligent granularity**: More granular for short spans, less granular for long spans
+- ✅ **Perfect alignment**: Contract bars positioned precisely relative to timeline markers
+- ✅ **Readable at all scales**: From 2-year contractors to 30+ year contractors
+- ✅ **Landscape-friendly**: Optimized timeline usage regardless of span length
+
+This enhancement transforms the Gantt chart from a tool that only worked for recent contractors into a truly scalable visualization that handles everything from startup contractors with a few contracts to established firms with decades of federal contracting history, making it equally useful for both short-term tactical analysis and long-term strategic intelligence.
+
+---
+
 ## [Unreleased] - 2025-07-11 15:45 UTC
 
 ### Enhanced - Revenue Timeline Visualization with Active vs Completed Contract Analysis
