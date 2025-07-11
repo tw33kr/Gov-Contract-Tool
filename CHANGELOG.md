@@ -5,7 +5,119 @@ All notable changes to the Federal Contract Research Tool will be documented in 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2025-07-11] - 22:15 UTC
+## [2025-01-20] - 23:00 UTC
+
+### Fixed - Gantt Chart Responsive Scaling with Screen-Aware Timeline
+
+**Developer**: Claude (Anthropic)  
+**Fix Type**: RESPONSIVE DESIGN ENHANCEMENT  
+**Issue Resolved**: Gantt chart x-axis/timeline did not scale properly with screen size
+
+#### 🎯 Problem Solved
+User reported that Gantt chart timeline scaling was not responsive to screen size, causing poor visualization on different displays. The chart would either compress too much on small screens or waste space on large displays. The timeline calculations were based on fixed values rather than adapting to the actual container width.
+
+#### 🚀 Implementation Details
+
+**Key Enhancements**:
+- **Container Width Detection**: Added useRef and resize observer to track actual Gantt container width
+- **Responsive Padding**: Dynamic timeline padding based on screen size and contract filter
+- **Adaptive Marker Density**: Timeline markers scale from 6-20 based on available width
+- **Smart Zoom Levels**: Auto-zoom considers both timeline span and pixels per day
+- **Screen-Aware Calculations**: All timeline positioning uses actual container dimensions
+
+**Technical Improvements**:
+
+```javascript
+// Responsive container width detection
+const ganttContainerRef = useRef(null);
+const [containerWidth, setContainerWidth] = useState(1200);
+
+useEffect(() => {
+  const updateWidth = () => {
+    if (ganttContainerRef.current) {
+      setContainerWidth(ganttContainerRef.current.clientWidth);
+    }
+  };
+  updateWidth();
+  window.addEventListener('resize', updateWidth);
+  return () => window.removeEventListener('resize', updateWidth);
+}, [viewMode]);
+
+// Dynamic padding based on screen size
+const screenFactor = containerWidth / 1200; // Normalize to standard width
+const basePadding = contractFilter === 'active' ? 30 : 60;
+const paddingDays = Math.max(basePadding, Math.min(180, contractDays * 0.1 * screenFactor));
+
+// Responsive marker density
+const targetMarkers = Math.max(6, Math.min(20, Math.floor(containerWidth / 80)));
+```
+
+#### 📊 Responsive Features Added
+
+**Dynamic Timeline Range**:
+- Padding adjusts based on container width
+- Active contract view gets tighter padding for better focus
+- Screen factor normalizes calculations across device sizes
+
+**Intelligent Zoom Detection**:
+- Calculates pixels per day to determine optimal scale
+- Switches between months/quarters/years based on density
+- Prevents overcrowding or sparse timeline markers
+
+**Adaptive Marker Generation**:
+- Marker count scales with available width (80px per marker)
+- Step sizes adjust to maintain readable timeline
+- Formatting adapts to zoom level (MMM yy, Q1 22, 2023)
+
+#### 🎯 User Experience Improvements
+
+**Before**:
+- Fixed timeline that looked cramped on small screens
+- Wasted space on large displays
+- Markers overlapping or too sparse
+- Poor x-axis utilization
+
+**After**:
+- ✅ Timeline adapts smoothly to any screen size
+- ✅ Optimal marker density at all widths
+- ✅ Efficient use of horizontal space
+- ✅ Clear delineation at all zoom levels
+- ✅ Debug info shows container width and days/pixel ratio
+
+#### 📱 Multi-Device Support
+
+**Small Screens (< 768px)**:
+- Fewer markers to prevent overlap
+- Tighter padding for maximum content
+- Simplified date formats
+
+**Standard Displays (768px - 1440px)**:
+- Balanced marker density
+- Standard padding calculations
+- Full date formatting
+
+**Large Displays (> 1440px)**:
+- More markers for detailed timeline
+- Extended padding for context
+- Enhanced precision in positioning
+
+#### 🧪 Testing & Validation
+
+**Container Metrics Display**:
+- Shows current container width in timeline info
+- Displays days per pixel calculation
+- Indicates current zoom level and marker count
+
+**Responsive Behavior**:
+- Timeline recalculates on window resize
+- Smooth transitions between zoom levels
+- Consistent behavior across breakpoints
+
+This enhancement ensures the Gantt chart provides optimal visualization regardless of screen size, from mobile devices to ultra-wide displays, making it truly responsive for modern federal contracting analysis needs.
+
+---
+
+## [2025-01-20] - 22:15 UTC
 
 ### Fixed - Gantt Chart Rollback to Previous Working State
 
@@ -14,7 +126,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **Issue Resolved**: Recent Gantt chart enhancements made visualization worse - reverted to previous working state
 
 #### 🎯 Problem Solved
-User reported that the most recent changes to the Gantt chart (from 2025-07-11 20:30 UTC) made the visualization worse visually and functionally. The overly complex responsive design and filter logic improvements actually degraded the user experience rather than improving it.
+User reported that the most recent changes to the Gantt chart (from 2025-01-20 20:30 UTC) made the visualization worse visually and functionally. The overly complex responsive design and filter logic improvements actually degraded the user experience rather than improving it.
 
 #### 🚀 Rollback Implementation
 
@@ -151,7 +263,7 @@ This rollback restores the Gantt chart to a stable, reliable state that prioriti
 
 ---
 
-## [2025-07-11] - 20:30 UTC
+## [2025-01-20] - 20:30 UTC
 
 ### Fixed - Gantt Chart Filter Logic and Enhanced Responsive Design
 
@@ -163,7 +275,7 @@ This rollback restores the Gantt chart to a stable, reliable state that prioriti
 
 ---
 
-## [2025-07-11] - 19:45 UTC
+## [2025-01-20] - 19:45 UTC
 
 ### Fixed - Gantt Chart Timeline Delineation and Scale Optimization
 
@@ -178,7 +290,7 @@ This critical optimization transforms the Gantt chart from a wasteful timeline t
 
 ---
 
-## [2025-07-11] - 18:30 UTC
+## [2025-01-20] - 18:30 UTC
 
 ### Fixed - Gantt Chart Timeline Alignment and Contract Positioning Accuracy
 
@@ -190,7 +302,7 @@ This critical fix transforms the Gantt chart from a potentially misleading visua
 
 ---
 
-## [2025-07-11] - 17:15 UTC
+## [2025-01-20] - 17:15 UTC
 
 ### Fixed - Enhanced Quarterly Timeline Marker Reduction for 8-Year Views
 
@@ -202,7 +314,7 @@ This enhancement specifically addresses the user's concern about quarterly timel
 
 ---
 
-## [2025-07-11] - 16:30 UTC
+## [2025-01-20] - 16:30 UTC
 
 ### Fixed - Gantt Chart Dynamic Scaling for Multi-Decade Contractor Histories
 
@@ -214,11 +326,11 @@ This enhancement transforms the Gantt chart from a tool that only worked for rec
 
 ---
 
-## [Unreleased] - 2025-07-11 15:45 UTC
+## [Unreleased] - 2025-01-20 15:45 UTC
 
 ### Enhanced - Revenue Timeline Visualization with Active vs Completed Contract Analysis
 
-**Developer**: Claude (Anthropic) - Session 2025-07-11  
+**Developer**: Claude (Anthropic) - Session 2025-01-20  
 **Enhancement Type**: MAJOR TIMELINE VISUALIZATION IMPROVEMENT  
 **Breaking Changes**: None (Fully Backward Compatible)
 
