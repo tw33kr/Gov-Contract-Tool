@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Query
 from typing import Optional, List
 from pydantic import BaseModel
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from app.services.sam_gov import SAMGovService
 from app.services.contractor_service import ContractorService
@@ -340,12 +340,285 @@ async def search_contractors(
         # Return empty results instead of raising exception
         return ContractorSearchResponse(contractors=[])
 
-@router.get("/contractors/{contractor_name}/profile")
-async def get_contractor_profile(contractor_name: str):
+@router.get("/contractor/{contractor_name}/profile")
+async def get_contractor_profile_endpoint(
+    contractor_name: str,
+    complete_data: bool = Query(False, description="Fetch complete dataset (all awards) via pagination")
+):
     """
-    Get detailed profile for a specific contractor using the FAST USASpending.gov approach
+    Get detailed contractor profile with optional complete data fetch
     
-    This endpoint now uses the same method as the USASpending.gov website for fast, accurate results
+    - contractor_name: Name of the contractor
+    - complete_data: If True, fetches ALL awards (may take 30-60 seconds for large contractors)
+    """
+    try:
+        logger.info(f"🔍 Profile request for {contractor_name} (complete_data: {complete_data})")
+        
+        profile = contractor_service.get_contractor_profile(contractor_name, fetch_complete_data=complete_data)
+        
+        if not profile:
+            raise HTTPException(status_code=404, detail=f"Contractor '{contractor_name}' not found")
+        
+        # Prepare response with metadata
+        response = {
+            "contractor": {
+                "name": profile["name"],
+                "total_awards": profile["total_awards"],
+                "total_value": profile["total_value"],
+                "uei": profile.get("uei"),
+                "recipient_hash": profile.get("recipient_hash")
+            },
+            "profile": profile,
+            "metadata": {
+                "is_complete_data": profile.get("is_complete_data", False),
+                "data_scope": "All available awards" if profile.get("is_complete_data") else "Recent 100 awards",
+                "fetch_type": "complete" if complete_data else "basic"
+            }
+        }
+        
+        logger.info(f"✅ Returned profile for {contractor_name}: {profile['total_awards']} awards, ${profile['total_value']:,.0f} total")
+        return response
+        
+    except Exception as e:
+        logger.error(f"❌ Error getting contractor profile: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving contractor profile: {str(e)}")
+
+@router.get("/contractor/{contractor_name}/awards")
+async def get_contractor_awards_endpoint(
+    contractor_name: str,
+    complete_data: bool = Query(False, description="Fetch complete dataset (all awards)"),
+    include_timeline: bool = Query(True, description="Include timeline analysis data")
+):
+    """
+    Get detailed awards data for contractor with timeline analysis
+    
+    - contractor_name: Name of the contractor
+    - complete_data: If True, fetches ALL awards via pagination
+    - include_timeline: Include contract duration and timeline data
+    """
+    try:
+        logger.info(f"🏆 Awards request for {contractor_name} (complete_data: {complete_data}, timeline: {include_timeline})")
+        
+        profile = contractor_service.get_contractor_profile(contractor_name, fetch_complete_data=complete_data)
+        
+        if not profile:
+            raise HTTPException(status_code=404, detail=f"Contractor '{contractor_name}' not found")
+        
+        # Prepare awards response
+        awards_response = {
+            "contractor_name": profile["name"],
+            "total_awards": profile["total_awards"],
+            "total_value": profile["total_value"],
+            "awards": profile.get("all_awards", profile.get("recent_awards", [])),
+            "metadata": {
+                "is_complete_data": profile.get("is_complete_data", False),
+                "awards_returned": len(profile.get("all_awards", profile.get("recent_awards", []))),
+                "data_scope": "All available awards" if profile.get("is_complete_data") else "Recent awards only"
+            }
+        }
+        
+        # Add timeline analysis if requested
+        if include_timeline and profile.get("contract_durations"):
+            awards_response["timeline_analysis"] = {
+                "contract_durations": profile.get("contract_durations", []),
+                "year_breakdown": profile.get("year_breakdown", {}),
+                "agency_breakdown": profile.get("agency_breakdown", {}),
+                "analysis_ready": True
+            }
+        
+        logger.info(f"✅ Returned {len(awards_response['awards'])} awards for {contractor_name}")
+        return awards_response
+        
+    except Exception as e:
+        logger.error(f"❌ Error getting contractor awards: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving contractor awards: {str(e)}")
+
+@router.get("/contractor/{contractor_name}/timeline")
+async def get_contractor_timeline_data(
+    contractor_name: str,
+    complete_data: bool = Query(True, description="Use complete dataset for timeline"),
+    include_projections: bool = Query(True, description="Include recompete projections")
+):
+    """
+    Get comprehensive timeline data for Gantt chart visualization
+    
+    - contractor_name: Name of the contractor
+    - complete_data: Use complete award dataset
+    - include_projections: Calculate recompete workload projections
+    """
+    try:
+        logger.info(f"📅 Timeline data request for {contractor_name}")
+        
+        profile = contractor_service.get_contractor_profile(contractor_name, fetch_complete_data=complete_data)
+        
+        if not profile:
+            raise HTTPException(status_code=404, detail=f"Contractor '{contractor_name}' not found")
+        
+        # Get all awards for timeline analysis
+        all_awards = profile.get("all_awards", profile.get("recent_awards", []))
+        
+        # Prepare timeline data
+        timeline_data = []
+        recompete_events = []
+        
+        for award in all_awards:
+            if award.get("start_date") and award.get("end_date"):
+                try:
+                    start_date = datetime.fromisoformat(award["start_date"].replace('Z', '+00:00'))
+                    end_date = datetime.fromisoformat(award["end_date"].replace('Z', '+00:00'))
+                    
+                    # Calculate contract timeline
+                    timeline_item = {
+                        "id": award.get("award_id", ""),
+                        "title": award.get("title", "")[:50] + "..." if len(award.get("title", "")) > 50 else award.get("title", ""),
+                        "full_title": award.get("title", ""),
+                        "start_date": start_date.isoformat(),
+                        "end_date": end_date.isoformat(),
+                        "duration_days": (end_date - start_date).days,
+                        "amount": award.get("amount", 0),
+                        "agency": award.get("agency", ""),
+                        "status": "active" if end_date > datetime.now() else "completed",
+                        "naics_code": award.get("naics_code", "")
+                    }
+                    
+                    timeline_data.append(timeline_item)
+                    
+                    # Calculate recompete projections if requested
+                    if include_projections and end_date > datetime.now():
+                        # Estimate recompete timeline (typically 6-12 months before contract end)
+                        recompete_start = end_date - timedelta(days=365)  # Start recompete process 1 year before
+                        recompete_peak = end_date - timedelta(days=180)   # Peak activity 6 months before
+                        
+                        if recompete_start > datetime.now():  # Only future recompetes
+                            recompete_events.append({
+                                "contract_id": award.get("award_id", ""),
+                                "contract_title": timeline_item["title"],
+                                "recompete_start": recompete_start.isoformat(),
+                                "recompete_peak": recompete_peak.isoformat(),
+                                "contract_end": end_date.isoformat(),
+                                "estimated_effort": min(100, max(10, int(award.get("amount", 0) / 1000000))),  # Effort based on contract value
+                                "amount": award.get("amount", 0)
+                            })
+                    
+                except Exception as date_error:
+                    logger.warning(f"⚠️ Date parsing error for award {award.get('award_id', 'unknown')}: {date_error}")
+                    continue
+        
+        # Sort timeline data by start date
+        timeline_data.sort(key=lambda x: x["start_date"])
+        recompete_events.sort(key=lambda x: x["recompete_start"])
+        
+        # Calculate workload projection data for integral chart
+        workload_projection = []
+        if include_projections and recompete_events:
+            from collections import defaultdict
+            
+            # Create monthly workload projection
+            monthly_workload = defaultdict(int)
+            
+            for event in recompete_events:
+                try:
+                    start = datetime.fromisoformat(event["recompete_start"])
+                    end = datetime.fromisoformat(event["contract_end"])
+                    effort = event["estimated_effort"]
+                    
+                    # Distribute effort over recompete period
+                    current = start
+                    while current <= end:
+                        month_key = current.strftime("%Y-%m")
+                        monthly_workload[month_key] += effort
+                        current = current.replace(day=1)
+                        if current.month == 12:
+                            current = current.replace(year=current.year + 1, month=1)
+                        else:
+                            current = current.replace(month=current.month + 1)
+                            
+                except Exception as workload_error:
+                    logger.warning(f"⚠️ Workload calculation error: {workload_error}")
+                    continue
+            
+            # Convert to timeline format
+            for month, workload in sorted(monthly_workload.items()):
+                workload_projection.append({
+                    "month": month,
+                    "workload": workload,
+                    "contracts_count": len([e for e in recompete_events 
+                                          if month in [datetime.fromisoformat(e["recompete_start"]).strftime("%Y-%m"),
+                                                      datetime.fromisoformat(e["contract_end"]).strftime("%Y-%m")]])
+                })
+        
+        response = {
+            "contractor_name": profile["name"],
+            "total_awards": profile["total_awards"],
+            "timeline_contracts": timeline_data,
+            "recompete_projections": recompete_events,
+            "workload_projection": workload_projection,
+            "summary": {
+                "total_contracts": len(timeline_data),
+                "active_contracts": len([t for t in timeline_data if t["status"] == "active"]),
+                "upcoming_recompetes": len(recompete_events),
+                "total_active_value": sum([t["amount"] for t in timeline_data if t["status"] == "active"]),
+                "timeline_span_years": len(set([t["start_date"][:4] for t in timeline_data])) if timeline_data else 0
+            },
+            "metadata": {
+                "is_complete_data": profile.get("is_complete_data", False),
+                "includes_projections": include_projections,
+                "data_scope": "All available awards" if profile.get("is_complete_data") else "Recent awards only"
+            }
+        }
+        
+        logger.info(f"✅ Returned timeline data for {contractor_name}: {len(timeline_data)} contracts, {len(recompete_events)} recompetes")
+        return response
+        
+    except Exception as e:
+        logger.error(f"❌ Error getting timeline data: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving timeline data: {str(e)}")
+
+@router.get("/contractor/{contractor_name}/stats")
+async def get_contractor_statistics(
+    contractor_name: str,
+    complete_data: bool = Query(True, description="Use complete dataset for statistics")
+):
+    """
+    Get comprehensive contractor statistics and analytics
+    """
+    try:
+        profile = contractor_service.get_contractor_profile(contractor_name, fetch_complete_data=complete_data)
+        
+        if not profile:
+            raise HTTPException(status_code=404, detail=f"Contractor '{contractor_name}' not found")
+        
+        stats = {
+            "contractor_name": profile["name"],
+            "basic_stats": {
+                "total_awards": profile["total_awards"],
+                "total_value": profile["total_value"],
+                "average_award_value": profile["total_value"] / max(1, profile["total_awards"]),
+                "first_award_date": profile.get("first_award_date"),
+                "latest_award_date": profile.get("latest_award_date")
+            },
+            "breakdown_stats": {
+                "year_breakdown": profile.get("year_breakdown", {}),
+                "agency_breakdown": profile.get("agency_breakdown", {}),
+                "primary_agencies": profile.get("primary_agencies", []),
+                "primary_naics": profile.get("naics_codes", [])
+            },
+            "metadata": {
+                "is_complete_data": profile.get("is_complete_data", False),
+                "data_completeness": "100%" if profile.get("is_complete_data") else "Limited to recent 100 awards"
+            }
+        }
+        
+        return stats
+        
+    except Exception as e:
+        logger.error(f"❌ Error getting contractor statistics: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving contractor statistics: {str(e)}")
+
+@router.get("/contractors/{contractor_name}/profile")
+async def get_contractor_profile_legacy(contractor_name: str):
+    """
+    Legacy endpoint for contractor profile (for backward compatibility)
     """
     try:
         logger.info(f"📊 Getting profile for contractor: {contractor_name}")
