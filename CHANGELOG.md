@@ -5,6 +5,82 @@ All notable changes to the Federal Contract Research Tool will be documented in 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2025-01-20] - 23:15 UTC
+
+### Fixed - Contracts Ending Soon Filter Clarification
+
+**Developer**: Claude (Anthropic)  
+**Fix Type**: FILTER ENHANCEMENT  
+**Issue Resolved**: Clarified that "Contracts Ending Soon" filter shows contracts ending within 1 year
+
+#### 🎯 Problem Solved
+User requested confirmation that the "Contracts Ending Soon" filter only shows contracts ending within one year from the current date. While the logic was already correctly implemented, the UI labels and tooltips were not clear about the 1-year timeframe.
+
+#### 🚀 Implementation Details
+
+**Key Enhancements**:
+- Updated filter option label from "Contracts Ending Soon" to "Ending Within 1 Year"
+- Changed `addDays(now, 365)` to `addYears(now, 1)` for more precise year calculation
+- Added clarifying text in Gantt chart header when filter is active
+- Enhanced timeline info to specify "contracts ending within 1 year"
+- Added days remaining display in contract labels when using this filter
+- Updated stat card label from "Ending Soon" to "Ending <1 Year"
+
+**Technical Improvements**:
+
+```javascript
+// More precise year calculation
+const isContractEndingSoon = (contract) => {
+  const now = new Date();
+  const endDate = parseISO(contract.end_date);
+  const oneYearFromNow = addYears(now, 1); // Changed from addDays(now, 365)
+  // Must be active (ending in future) AND ending before one year from now
+  return isAfter(endDate, now) && isBefore(endDate, oneYearFromNow);
+};
+
+// Added tighter padding for ending-soon view
+const basePadding = contractFilter === 'active' || contractFilter === 'ending-soon' ? 30 : 60;
+```
+
+#### 📊 UI Clarifications Added
+
+**Filter Dropdown**:
+- Changed: "Contracts Ending Soon" → "Ending Within 1 Year"
+
+**Gantt Chart Header**:
+- Added: "(Active Contracts Ending Within 1 Year)" subtitle
+- Shows message when no contracts match: "No active contracts are ending within the next year."
+
+**Timeline Info Bar**:
+- Updated: "Showing X contracts ending within 1 year"
+- Added filter details showing the exact cutoff date
+
+**Contract Labels**:
+- Added days remaining display (e.g., "(365d)") next to amount
+- Hover tooltip includes "Ending in: X days"
+
+**List View**:
+- Added orange "ENDING IN X DAYS" badge for contracts in this filter
+- Updated description: "Active contracts ending within 1 year"
+
+#### 🎯 User Experience Improvements
+
+**Before**:
+- Unclear what timeframe "ending soon" meant
+- No indication of the 1-year cutoff
+- Users had to guess the filter criteria
+
+**After**:
+- ✅ Clear "Within 1 Year" labeling throughout
+- ✅ Visual indicators showing days remaining
+- ✅ Explicit cutoff date shown in filter info
+- ✅ Consistent messaging across all views
+- ✅ Orange color coding for ending soon contracts
+
+This enhancement ensures users understand exactly which contracts are shown when using the "Ending Within 1 Year" filter, making it a valuable tool for contract renewal planning and business development activities.
+
+---
+
 ## [2025-01-20] - 23:00 UTC
 
 ### Fixed - Gantt Chart Responsive Scaling with Screen-Aware Timeline
