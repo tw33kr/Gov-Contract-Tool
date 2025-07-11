@@ -94,7 +94,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
     }
   }, [timelineData, contractFilter]);
 
-  // Calculate dynamic time range based on filtered contracts with smart scaling
+  // Calculate dynamic time range based on filtered contracts with enhanced scaling
   const timeRange = useMemo(() => {
     if (!filteredContracts || filteredContracts.length === 0) {
       const now = new Date();
@@ -116,7 +116,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
     
     let startPadding, endPadding, duration;
     
-    // Dynamic scaling based on total time span
+    // Enhanced dynamic scaling with better breakpoints
     if (totalYears <= 3) {
       // Short duration: monthly granularity with minimal padding
       startPadding = 3; // 3 months before
@@ -127,11 +127,16 @@ const ContractorTimeline = ({ contractor, profile }) => {
       startPadding = 6; // 6 months before
       endPadding = 12;  // 12 months after
       duration = 'medium';
-    } else {
+    } else if (totalYears <= 20) {
       // Long duration: yearly granularity
       startPadding = 12; // 12 months before
       endPadding = 12;   // 12 months after
       duration = 'long';
+    } else {
+      // Very long duration: multi-year granularity
+      startPadding = 24; // 24 months before
+      endPadding = 24;   // 24 months after
+      duration = 'very-long';
     }
     
     return {
@@ -155,6 +160,8 @@ const ContractorTimeline = ({ contractor, profile }) => {
         return 'quarters';
       case 'long':
         return 'years';
+      case 'very-long':
+        return 'decades'; // New scale for very long timelines
       default:
         return 'months';
     }
@@ -214,7 +221,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
     return timelinePoints;
   }, [timelineData, timeRange]);
 
-  // Generate intelligent time scale for Gantt chart with proper spacing
+  // Generate intelligent time scale for Gantt chart with enhanced spacing for long timelines
   const ganttTimeScale = useMemo(() => {
     if (!timeRange.start || !timeRange.end) return [];
     
@@ -243,9 +250,23 @@ const ContractorTimeline = ({ contractor, profile }) => {
         break;
         
       case 'years':
-        // For long durations, show yearly markers
+        // For long durations, show yearly markers with intelligent spacing
         stepFunction = addYears;
-        stepSize = Math.max(1, Math.floor(totalYears / 12)); // Max 12 year markers
+        if (totalYears <= 15) {
+          stepSize = 1; // Every year for shorter spans
+        } else if (totalYears <= 25) {
+          stepSize = 2; // Every 2 years for medium-long spans
+        } else {
+          stepSize = 5; // Every 5 years for very long spans
+        }
+        formatFunction = (date) => format(date, 'yyyy');
+        current = startOfYear(current);
+        break;
+        
+      case 'decades':
+        // For very long durations (30+ years), show decade markers
+        stepFunction = addYears;
+        stepSize = Math.max(5, Math.floor(totalYears / 8)); // 5-10 year steps, max 8 markers
         formatFunction = (date) => format(date, 'yyyy');
         current = startOfYear(current);
         break;
@@ -257,8 +278,10 @@ const ContractorTimeline = ({ contractor, profile }) => {
         current = startOfMonth(current);
     }
     
-    // Generate scale points with proper spacing
-    const maxMarkers = optimalZoomLevel === 'years' ? 12 : (optimalZoomLevel === 'quarters' ? 20 : 24);
+    // Generate scale points with proper spacing - reduced max markers for readability
+    const maxMarkers = optimalZoomLevel === 'decades' ? 8 : 
+                      (optimalZoomLevel === 'years' ? 10 : 
+                      (optimalZoomLevel === 'quarters' ? 16 : 20));
     let markerCount = 0;
     
     while (current <= timeRange.end && markerCount < maxMarkers) {
@@ -486,6 +509,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
               <option value="months">Monthly View</option>
               <option value="quarters">Quarterly View</option>
               <option value="years">Yearly View</option>
+              <option value="decades">Multi-Year View</option>
             </select>
             
             <div className="flex rounded-md shadow-sm">
@@ -565,7 +589,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
           </div>
         </div>
 
-        {/* Timeline Info with Dynamic Scaling Information */}
+        {/* Enhanced Timeline Info with Clearer Scaling Information */}
         <div className="mt-4 p-3 bg-blue-50 rounded-lg">
           <div className="text-sm text-blue-800">
             <strong>Current View:</strong> {
@@ -579,7 +603,12 @@ const ContractorTimeline = ({ contractor, profile }) => {
               (Timeline: {format(timeRange.start, 'MMM yyyy')} - {format(timeRange.end, 'MMM yyyy')})
             </span>
             <span className="ml-2 font-medium">
-              | Scale: {optimalZoomLevel} ({timeRange.totalYears}+ year span)
+              | Scale: {
+                optimalZoomLevel === 'decades' ? `Multi-Year (${ganttTimeScale.length > 0 ? Math.round(timeRange.totalYears / ganttTimeScale.length) : 5}-year intervals)` :
+                optimalZoomLevel === 'years' ? `Yearly` :
+                optimalZoomLevel === 'quarters' ? `Quarterly` : 
+                `Monthly`
+              } ({timeRange.totalYears}+ year span)
             </span>
           </div>
         </div>
@@ -707,13 +736,16 @@ const ContractorTimeline = ({ contractor, profile }) => {
             </div>
           </div>
         ) : viewMode === 'gantt' ? (
-          // ENHANCED Gantt Chart View with dynamic scaling
+          // ENHANCED Gantt Chart View with improved long timeline scaling
           <div className="p-6">
             <h3 className="text-lg font-medium text-gray-900 mb-6">
-              📋 Contract Portfolio Gantt Chart - Dynamic Scaling
+              📋 Contract Portfolio Gantt Chart - Enhanced Scaling
               {contractFilter === 'active' && <span className="text-sm text-green-600 ml-2">(Active Contracts Only)</span>}
               {contractFilter === 'ending-soon' && <span className="text-sm text-orange-600 ml-2">(Contracts Ending Within 1 Year)</span>}
-              <span className="text-sm text-purple-600 ml-2">({optimalZoomLevel.charAt(0).toUpperCase() + optimalZoomLevel.slice(1)} Scale)</span>
+              <span className="text-sm text-purple-600 ml-2">
+                ({optimalZoomLevel === 'decades' ? 'Multi-Year Scale' : 
+                  optimalZoomLevel.charAt(0).toUpperCase() + optimalZoomLevel.slice(1)} Scale)
+              </span>
             </h3>
             
             {sortedContracts.length === 0 ? (
@@ -723,7 +755,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
               </div>
             ) : (
               <>
-                {/* Enhanced Time Scale Header with proper spacing */}
+                {/* Enhanced Time Scale Header with better spacing for long timelines */}
                 <div className="mb-4 border-b border-gray-200 pb-2 bg-gray-50 rounded-t-lg">
                   <div className="text-xs text-gray-500 font-medium relative h-12 flex items-end">
                     <div className="w-64 flex-shrink-0 text-center border-r border-gray-300 py-2">
@@ -732,7 +764,8 @@ const ContractorTimeline = ({ contractor, profile }) => {
                     <div className="flex-1 relative px-2">
                       <div className="text-center mb-1 text-gray-700 font-semibold">
                         Timeline: {format(timeRange.start, 'MMM yyyy')} - {format(timeRange.end, 'MMM yyyy')} 
-                        ({optimalZoomLevel.charAt(0).toUpperCase() + optimalZoomLevel.slice(1)} View)
+                        ({optimalZoomLevel === 'decades' ? 'Multi-Year' : 
+                          optimalZoomLevel.charAt(0).toUpperCase() + optimalZoomLevel.slice(1)} View)
                       </div>
                       <div className="relative">
                         {ganttTimeScale.map((scaleItem, index) => {
@@ -744,7 +777,8 @@ const ContractorTimeline = ({ contractor, profile }) => {
                               style={{ 
                                 left: `${position}%`,
                                 transform: 'translateX(-50%)',
-                                minWidth: optimalZoomLevel === 'years' ? '40px' : '50px'
+                                minWidth: optimalZoomLevel === 'decades' ? '60px' : 
+                                         (optimalZoomLevel === 'years' ? '50px' : '40px')
                               }}
                             >
                               <div className="text-gray-600 font-medium">
@@ -799,7 +833,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
                             >
                               {!isShortContract && (
                                 <span className="truncate text-xs">
-                                  {optimalZoomLevel === 'years' ? 
+                                  {optimalZoomLevel === 'decades' || optimalZoomLevel === 'years' ? 
                                     format(parseISO(contract.start_date), 'yyyy') :
                                     `${format(parseISO(contract.start_date), 'MMM yy')} - ${format(parseISO(contract.end_date), 'MMM yy')}`
                                   }
@@ -813,7 +847,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
                   })}
                 </div>
 
-                {/* Enhanced Legend with time scale info */}
+                {/* Enhanced Legend with timeline scale information */}
                 <div className="mt-6 space-y-3">
                   <div className="flex flex-wrap gap-4 text-sm">
                     <div className="flex items-center space-x-2">
@@ -833,12 +867,15 @@ const ContractorTimeline = ({ contractor, profile }) => {
                   </div>
                   
                   <div className="text-sm text-gray-600 bg-gray-50 p-3 rounded-lg">
-                    <strong>Dynamic Scaling:</strong> {
+                    <strong>Enhanced Scaling:</strong> {
                       optimalZoomLevel === 'months' ? 
-                        `Monthly view for short-term perspective (${timeRange.totalYears} year span)` :
+                        `Monthly view for detailed perspective (${timeRange.totalYears} year span)` :
                       optimalZoomLevel === 'quarters' ?
                         `Quarterly view for medium-term perspective (${timeRange.totalYears} year span)` :
-                        `Yearly view for long-term perspective (${timeRange.totalYears}+ year span)`
+                      optimalZoomLevel === 'years' ?
+                        `Yearly view with ${ganttTimeScale.length > 0 && ganttTimeScale.length < timeRange.totalYears ? 
+                          Math.round(timeRange.totalYears / ganttTimeScale.length) + '-year intervals' : 'annual markers'} (${timeRange.totalYears}+ year span)` :
+                        `Multi-year view with ${ganttTimeScale.length > 0 ? Math.round(timeRange.totalYears / ganttTimeScale.length) : 5}-year intervals for maximum readability (${timeRange.totalYears}+ year span)`
                     }
                     {ganttTimeScale.length > 0 && ` | ${ganttTimeScale.length} time markers displayed`}
                   </div>
@@ -923,7 +960,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
         )}
       </div>
 
-      {/* Business Intelligence Summary */}
+      {/* Enhanced Business Intelligence Summary */}
       <div className="bg-gradient-to-r from-blue-50 to-green-50 p-6 rounded-lg">
         <h4 className="font-medium text-gray-900 mb-3">🎯 Business Intelligence Summary</h4>
         <div className="text-sm text-gray-700 space-y-2">
@@ -936,11 +973,13 @@ const ContractorTimeline = ({ contractor, profile }) => {
             with {summaryStats.maxContracts} simultaneous contracts.
           </p>
           <p>
-            <strong>Dynamic Scaling Insight:</strong> {timeRange.totalYears <= 3 ? 
+            <strong>Enhanced Scaling Insight:</strong> {timeRange.totalYears <= 3 ? 
               'Short timeline (≤3 years) uses monthly granularity for detailed analysis.' :
               timeRange.totalYears <= 8 ?
               'Medium timeline (3-8 years) uses quarterly granularity for balanced view.' :
-              'Long timeline (8+ years) uses yearly granularity for broad perspective, optimizing readability across decades of contracting history.'
+              timeRange.totalYears <= 20 ?
+              'Long timeline (8-20 years) uses yearly granularity for historical perspective.' :
+              'Very long timeline (20+ years) uses multi-year intervals for optimal readability, ideal for analyzing decades of contracting history.'
             }
           </p>
         </div>
