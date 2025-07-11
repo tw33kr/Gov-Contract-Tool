@@ -242,10 +242,16 @@ const ContractorTimeline = ({ contractor, profile }) => {
         break;
         
       case 'quarters':
-        // For medium durations, show quarterly markers
+        // Enhanced quarterly markers with reduced frequency for better readability
         stepFunction = addQuarters;
-        stepSize = 1;
-        formatFunction = (date) => format(date, 'QQQ yyyy');
+        // Dynamic step size: every quarter for ≤5 years, every 2 quarters for >5 years
+        stepSize = totalYears <= 5 ? 1 : 2;
+        // Better quarterly format - show season/year instead of generic quarter notation
+        formatFunction = (date) => {
+          const quarter = Math.floor(date.getMonth() / 3) + 1;
+          const seasonMap = { 1: 'Q1', 2: 'Q2', 3: 'Q3', 4: 'Q4' };
+          return `${seasonMap[quarter]} ${format(date, 'yy')}`;
+        };
         current = startOfQuarter(current);
         break;
         
@@ -278,10 +284,10 @@ const ContractorTimeline = ({ contractor, profile }) => {
         current = startOfMonth(current);
     }
     
-    // Generate scale points with proper spacing - reduced max markers for readability
+    // Generate scale points with proper spacing - enhanced limits for better readability
     const maxMarkers = optimalZoomLevel === 'decades' ? 8 : 
                       (optimalZoomLevel === 'years' ? 10 : 
-                      (optimalZoomLevel === 'quarters' ? 16 : 20));
+                      (optimalZoomLevel === 'quarters' ? 8 : 20)); // Reduced quarterly max from 16 to 8
     let markerCount = 0;
     
     while (current <= timeRange.end && markerCount < maxMarkers) {
@@ -606,7 +612,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
               | Scale: {
                 optimalZoomLevel === 'decades' ? `Multi-Year (${ganttTimeScale.length > 0 ? Math.round(timeRange.totalYears / ganttTimeScale.length) : 5}-year intervals)` :
                 optimalZoomLevel === 'years' ? `Yearly` :
-                optimalZoomLevel === 'quarters' ? `Quarterly` : 
+                optimalZoomLevel === 'quarters' ? `Quarterly (${timeRange.totalYears <= 5 ? 'every quarter' : 'every 2 quarters'})` : 
                 `Monthly`
               } ({timeRange.totalYears}+ year span)
             </span>
@@ -867,17 +873,17 @@ const ContractorTimeline = ({ contractor, profile }) => {
                   </div>
                   
                   <div className="text-sm text-gray-600 bg-gray-50 p-3 rounded-lg">
-                    <strong>Enhanced Scaling:</strong> {
+                    <strong>Enhanced Quarterly Scaling:</strong> {
                       optimalZoomLevel === 'months' ? 
                         `Monthly view for detailed perspective (${timeRange.totalYears} year span)` :
                       optimalZoomLevel === 'quarters' ?
-                        `Quarterly view for medium-term perspective (${timeRange.totalYears} year span)` :
+                        `Quarterly view with ${timeRange.totalYears <= 5 ? 'every quarter' : 'every 2 quarters'} for optimal readability (${timeRange.totalYears} year span)` :
                       optimalZoomLevel === 'years' ?
                         `Yearly view with ${ganttTimeScale.length > 0 && ganttTimeScale.length < timeRange.totalYears ? 
                           Math.round(timeRange.totalYears / ganttTimeScale.length) + '-year intervals' : 'annual markers'} (${timeRange.totalYears}+ year span)` :
                         `Multi-year view with ${ganttTimeScale.length > 0 ? Math.round(timeRange.totalYears / ganttTimeScale.length) : 5}-year intervals for maximum readability (${timeRange.totalYears}+ year span)`
                     }
-                    {ganttTimeScale.length > 0 && ` | ${ganttTimeScale.length} time markers displayed`}
+                    {ganttTimeScale.length > 0 && ` | ${ganttTimeScale.length} time markers displayed for optimal readability`}
                   </div>
                 </div>
                 
@@ -976,7 +982,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
             <strong>Enhanced Scaling Insight:</strong> {timeRange.totalYears <= 3 ? 
               'Short timeline (≤3 years) uses monthly granularity for detailed analysis.' :
               timeRange.totalYears <= 8 ?
-              'Medium timeline (3-8 years) uses quarterly granularity for balanced view.' :
+              'Medium timeline (3-8 years) uses enhanced quarterly granularity with reduced markers for optimal readability.' :
               timeRange.totalYears <= 20 ?
               'Long timeline (8-20 years) uses yearly granularity for historical perspective.' :
               'Very long timeline (20+ years) uses multi-year intervals for optimal readability, ideal for analyzing decades of contracting history.'
