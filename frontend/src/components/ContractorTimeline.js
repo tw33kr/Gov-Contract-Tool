@@ -411,111 +411,31 @@ const ContractorTimeline = ({ contractor, profile }) => {
               📈 Revenue Performance Timeline
             </h3>
             
-            <div className="relative h-96 mb-6">
-              {/* Revenue Area Chart */}
-              <svg width="100%" height="100%" className="overflow-visible">
-                <defs>
-                  {/* Gradients for active and completed revenue */}
-                  <linearGradient id="activeGradient" x1="0%" y1="0%" x2="0%" y2="100%">
-                    <stop offset="0%" stopColor="#10b981" stopOpacity="0.8"/>
-                    <stop offset="100%" stopColor="#10b981" stopOpacity="0.2"/>
-                  </linearGradient>
-                  <linearGradient id="completedGradient" x1="0%" y1="0%" x2="0%" y2="100%">
-                    <stop offset="0%" stopColor="#94a3b8" stopOpacity="0.6"/>
-                    <stop offset="100%" stopColor="#94a3b8" stopOpacity="0.1"/>
-                  </linearGradient>
-                </defs>
-                
-                {revenueTimelineData.length > 1 && (
-                  <>
-                    {/* Calculate chart dimensions */}
-                    {(() => {
-                      const maxRevenue = Math.max(...revenueTimelineData.map(point => point.totalRevenue));
-                      const chartHeight = 320; // Leave room for axes
-                      const chartWidth = 800; // Approximate
-                      
-                      // Generate paths for active and completed revenue areas
-                      const activePoints = revenueTimelineData.map((point, index) => {
-                        const x = (index / (revenueTimelineData.length - 1)) * 90; // 90% of width
-                        const y = chartHeight - ((point.activeRevenue / maxRevenue) * (chartHeight - 40));
-                        return `${x + 5}% ${y}px`;
-                      }).join(' L ');
-                      
-                      const completedPoints = revenueTimelineData.map((point, index) => {
-                        const x = (index / (revenueTimelineData.length - 1)) * 90;
-                        const activeY = chartHeight - ((point.activeRevenue / maxRevenue) * (chartHeight - 40));
-                        const totalY = chartHeight - ((point.totalRevenue / maxRevenue) * (chartHeight - 40));
-                        return `${x + 5}% ${activeY}px`;
-                      }).join(' L ');
-                      
-                      const totalPoints = revenueTimelineData.map((point, index) => {
-                        const x = (index / (revenueTimelineData.length - 1)) * 90;
-                        const y = chartHeight - ((point.totalRevenue / maxRevenue) * (chartHeight - 40));
-                        return `${x + 5}% ${y}px`;
-                      }).join(' L ');
-
-                      return (
-                        <>
-                          {/* Active Revenue Area */}
-                          <path
-                            d={`M 5% ${chartHeight}px L ${activePoints} L 95% ${chartHeight}px Z`}
-                            fill="url(#activeGradient)"
-                            stroke="#10b981"
-                            strokeWidth="2"
-                          />
-                          
-                          {/* Completed Revenue Area */}
-                          <path
-                            d={`M 5% ${chartHeight}px L ${totalPoints} L 95% ${chartHeight}px Z`}
-                            fill="url(#completedGradient)"
-                            stroke="#94a3b8"
-                            strokeWidth="1"
-                            fillOpacity="0.3"
-                          />
-                          
-                          {/* Total Revenue Line */}
-                          <path
-                            d={`M ${totalPoints}`}
-                            fill="none"
-                            stroke="#1f2937"
-                            strokeWidth="3"
-                          />
-                        </>
-                      );
-                    })()}
-                  </>
-                )}
-                
-                {/* Y-axis labels */}
-                <g className="text-xs text-gray-500">
-                  {[0, 0.25, 0.5, 0.75, 1].map((ratio, index) => {
-                    const maxRevenue = Math.max(...revenueTimelineData.map(point => point.totalRevenue));
-                    const value = maxRevenue * (1 - ratio);
-                    const y = 40 + (ratio * 280);
-                    
-                    return (
-                      <text key={index} x="2%" y={y} className="text-xs fill-gray-500">
-                        {formatCurrency(value)}
-                      </text>
-                    );
-                  })}
-                </g>
-              </svg>
-              
-              {/* Time axis */}
-              <div className="absolute bottom-0 left-0 right-0 flex justify-between text-xs text-gray-500 px-12">
-                {timeScale.slice(0, 8).map((date, index) => (
-                  <span key={index}>
-                    {zoomLevel === 'months' && format(date, 'MMM yyyy')}
-                    {zoomLevel === 'quarters' && format(date, 'QQQ yyyy')}
-                    {zoomLevel === 'years' && format(date, 'yyyy')}
-                  </span>
-                ))}
+            <div className="relative h-80 mb-6 bg-gray-50 rounded-lg p-4">
+              {/* Simple Revenue Chart Placeholder */}
+              <div className="text-center text-gray-500 mt-20">
+                <div className="text-4xl mb-4">📊</div>
+                <p>Revenue Timeline Chart</p>
+                <p className="text-sm">(Advanced SVG chart visualization coming soon)</p>
+                <div className="mt-4 space-y-2">
+                  <div className="flex justify-between">
+                    <span>Peak Revenue Period:</span>
+                    <span className="font-medium">{summaryStats.peakPeriod}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Current Active Revenue:</span>
+                    <span className="font-medium text-green-600">{formatCurrency(summaryStats.activeValue)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Total Lifetime Value:</span>
+                    <span className="font-medium text-blue-600">{formatCurrency(summaryStats.totalValue)}</span>
+                  </div>
+                </div>
               </div>
             </div>
 
             {/* Legend */}
-            <div className="flex justify-center space-x-6 text-sm">
+            <div className="flex justify-center space-x-6 text-sm mb-6">
               <div className="flex items-center space-x-2">
                 <div className="w-4 h-4 bg-green-500 rounded"></div>
                 <span>Active Contract Revenue</span>
@@ -531,7 +451,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
             </div>
 
             {/* Business Intelligence Insights */}
-            <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="bg-green-50 p-4 rounded-lg">
                 <h4 className="font-medium text-green-900 mb-2">💼 Current Business Status</h4>
                 <div className="text-sm text-green-800 space-y-1">
