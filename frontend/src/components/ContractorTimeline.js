@@ -84,11 +84,12 @@ const ContractorTimeline = ({ contractor, profile }) => {
     return isAfter(endDate, now);
   };
 
-  // Check if contract is ending soon (within 1 year from today)
+  // Check if contract is ending soon (active AND within 1 year from today)
   const isContractEndingSoon = (contract) => {
     const now = new Date();
     const endDate = parseISO(contract.end_date);
-    const oneYearFromNow = addDays(now, 365);
+    const oneYearFromNow = addYears(now, 1);
+    // Must be active (ending in future) AND ending before one year from now
     return isAfter(endDate, now) && isBefore(endDate, oneYearFromNow);
   };
 
@@ -143,7 +144,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
     
     // Responsive padding calculation
     const screenFactor = containerWidth / 1200; // Normalize to standard width
-    const basePadding = contractFilter === 'active' ? 30 : 60; // Less padding for active view
+    const basePadding = contractFilter === 'active' || contractFilter === 'ending-soon' ? 30 : 60; // Less padding for focused views
     const paddingDays = Math.max(basePadding, Math.min(180, contractDays * 0.1 * screenFactor));
     
     const paddedStart = addDays(minStart, -paddingDays);
@@ -506,7 +507,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
               className="px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
             >
               <option value="active">Active Contracts Only</option>
-              <option value="ending-soon">Contracts Ending Soon</option>
+              <option value="ending-soon">Ending Within 1 Year</option>
               <option value="all">All Contract History</option>
             </select>
             
@@ -580,7 +581,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
             <div className="text-lg font-bold text-orange-600">
               {summaryStats.endingSoonContracts || 0}
             </div>
-            <div className="text-sm text-orange-800">Ending Soon</div>
+            <div className="text-sm text-orange-800">Ending &lt;1 Year</div>
           </div>
           <div className="text-center p-4 bg-red-50 rounded-lg">
             <div className="text-lg font-bold text-red-600">
@@ -605,7 +606,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
               contractFilter === 'active' ? 
                 `Showing ${summaryStats.activeContracts} active contracts` :
               contractFilter === 'ending-soon' ?
-                `Showing ${summaryStats.endingSoonContracts} contracts ending soon` :
+                `Showing ${summaryStats.endingSoonContracts} contracts ending within 1 year` :
                 `Showing all ${summaryStats.totalContracts} contracts in history`
             }
             <span className="ml-2">
@@ -629,6 +630,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
             <h3 className="text-lg font-medium text-gray-900 mb-6">
               📈 Revenue Performance Timeline
               {contractFilter === 'active' && <span className="text-sm text-green-600 ml-2">(Active Contracts in Green)</span>}
+              {contractFilter === 'ending-soon' && <span className="text-sm text-orange-600 ml-2">(Contracts Ending Within 1 Year)</span>}
               {contractFilter === 'all' && <span className="text-sm text-gray-600 ml-2">(Active: Green, Completed: Gray)</span>}
             </h3>
             
@@ -748,7 +750,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
             <h3 className="text-lg font-medium text-gray-900 mb-6">
               📋 Contract Portfolio Gantt Chart
               {contractFilter === 'active' && <span className="text-sm text-green-600 ml-2">(Active Contracts Only)</span>}
-              {contractFilter === 'ending-soon' && <span className="text-sm text-orange-600 ml-2">(Contracts Ending Soon)</span>}
+              {contractFilter === 'ending-soon' && <span className="text-sm text-orange-600 ml-2">(Active Contracts Ending Within 1 Year)</span>}
               {contractFilter === 'all' && <span className="text-sm text-gray-600 ml-2">(All Contract History)</span>}
             </h3>
             
@@ -756,6 +758,9 @@ const ContractorTimeline = ({ contractor, profile }) => {
               <div className="text-center text-gray-500 py-8">
                 <div className="text-4xl mb-4">📅</div>
                 <p>No contracts found for the selected filter criteria.</p>
+                {contractFilter === 'ending-soon' && (
+                  <p className="text-sm mt-2">No active contracts are ending within the next year.</p>
+                )}
               </div>
             ) : (
               <>
@@ -799,6 +804,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
                     const color = getStatusColor(contract);
                     const widthPercent = parseFloat(position.width);
                     const isShortContract = widthPercent < 5;
+                    const daysUntilEnd = differenceInDays(parseISO(contract.end_date), new Date());
                     
                     return (
                       <div key={contract.id || index} className="relative h-8 hover:bg-gray-50 group">
@@ -813,6 +819,9 @@ const ContractorTimeline = ({ contractor, profile }) => {
                             </div>
                             <div className="text-xs text-gray-500">
                               {formatCurrency(contract.amount)}
+                              {contractFilter === 'ending-soon' && daysUntilEnd > 0 && (
+                                <span className="ml-2 text-orange-600">({daysUntilEnd}d)</span>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -833,7 +842,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
                                 top: '2px',
                                 minWidth: '2px',
                               }}
-                              title={`${contract.title}\n${formatDate(contract.start_date)} - ${formatDate(contract.end_date)}\n${formatCurrency(contract.amount)}\nDuration: ${differenceInDays(parseISO(contract.end_date), parseISO(contract.start_date))} days`}
+                              title={`${contract.title}\n${formatDate(contract.start_date)} - ${formatDate(contract.end_date)}\n${formatCurrency(contract.amount)}\nDuration: ${differenceInDays(parseISO(contract.end_date), parseISO(contract.start_date))} days\nEnding in: ${daysUntilEnd} days`}
                             >
                               {!isShortContract && (
                                 <span className="truncate text-xs">
@@ -860,7 +869,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
                     </div>
                     <div className="flex items-center space-x-2">
                       <div className="w-4 h-4 bg-orange-500 rounded"></div>
-                      <span>Ending Soon (&lt;3 months)</span>
+                      <span>Ending Soon (&lt;90 days)</span>
                     </div>
                     {contractFilter === 'all' && (
                       <div className="flex items-center space-x-2">
@@ -875,6 +884,12 @@ const ContractorTimeline = ({ contractor, profile }) => {
                     {sortedContracts.length > 50 && ' (First 50 contracts shown for performance)'}
                     <br />
                     <strong>Container Width:</strong> {containerWidth}px | <strong>Days per pixel:</strong> {(timeRange.totalDays / containerWidth).toFixed(2)}
+                    {contractFilter === 'ending-soon' && (
+                      <>
+                        <br />
+                        <strong>Filter:</strong> Only showing active contracts that end before {format(addYears(new Date(), 1), 'MMM dd, yyyy')}
+                      </>
+                    )}
                   </div>
                 </div>
               </>
@@ -889,7 +904,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
               </h3>
               <p className="text-sm text-gray-600 mt-1">
                 {contractFilter === 'active' ? 'Active contracts only' : 
-                 contractFilter === 'ending-soon' ? 'Contracts ending soon' :
+                 contractFilter === 'ending-soon' ? 'Active contracts ending within 1 year' :
                  'Complete contract history'}
               </p>
             </div>
@@ -914,6 +929,11 @@ const ContractorTimeline = ({ contractor, profile }) => {
                         }`}>
                           {isActive ? 'ACTIVE' : 'COMPLETED'}
                         </span>
+                        {contractFilter === 'ending-soon' && daysRemaining > 0 && daysRemaining <= 365 && (
+                          <span className="px-2 py-1 rounded text-xs font-medium bg-orange-100 text-orange-800">
+                            ENDING IN {daysRemaining} DAYS
+                          </span>
+                        )}
                       </div>
                       
                       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-sm text-gray-600">
@@ -966,6 +986,12 @@ const ContractorTimeline = ({ contractor, profile }) => {
             <strong>Timeline View:</strong> Responsive Gantt chart with {optimalZoomLevel} scale optimized for {containerWidth}px screen width, 
             showing {timeRange.totalDays} days with {ganttTimeScale.length} markers.
           </p>
+          {contractFilter === 'ending-soon' && (
+            <p>
+              <strong>Contracts Ending Soon:</strong> {summaryStats.endingSoonContracts} contracts are ending within the next year, 
+              providing opportunities for renewal discussions or transition planning.
+            </p>
+          )}
         </div>
       </div>
     </div>
