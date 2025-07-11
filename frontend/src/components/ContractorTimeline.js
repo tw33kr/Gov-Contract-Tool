@@ -110,21 +110,27 @@ const ContractorTimeline = ({ contractor, profile }) => {
     while (current <= timeRange.end) {
       let activeRevenue = 0;
       let completedRevenue = 0;
+      let totalActiveContracts = 0;
+      let totalCompletedContracts = 0;
       
-      // Calculate revenue at this point in time
+      // Calculate revenue and contract count at this point in time
       allContracts.forEach(contract => {
         const contractStart = new Date(contract.start_date);
         const contractEnd = new Date(contract.end_date);
         
         // Check if contract was active at this time
         if (contractStart <= current && contractEnd >= current) {
-          const isActive = isContractActive(contract);
-          const monthlyRevenue = (contract.amount || 0) / 12; // Approximate monthly revenue
+          const monthlyRevenue = (contract.amount || 0) / Math.max(1, differenceInDays(contractEnd, contractStart) / 30.44); // Approximate monthly revenue
           
-          if (isActive) {
+          // Determine if this contract is currently active (at the end of our timeline)
+          const isCurrentlyActive = isAfter(contractEnd, new Date());
+          
+          if (isCurrentlyActive) {
             activeRevenue += monthlyRevenue;
+            totalActiveContracts += 1;
           } else {
             completedRevenue += monthlyRevenue;
+            totalCompletedContracts += 1;
           }
         }
       });
@@ -134,6 +140,9 @@ const ContractorTimeline = ({ contractor, profile }) => {
         activeRevenue,
         completedRevenue,
         totalRevenue: activeRevenue + completedRevenue,
+        activeContracts: totalActiveContracts,
+        completedContracts: totalCompletedContracts,
+        totalContracts: totalActiveContracts + totalCompletedContracts,
         month: format(current, 'yyyy-MM')
       });
       
@@ -182,12 +191,19 @@ const ContractorTimeline = ({ contractor, profile }) => {
     const activeValue = activeContracts.reduce((sum, contract) => sum + (contract.amount || 0), 0);
     const totalValue = contracts.reduce((sum, contract) => sum + (contract.amount || 0), 0);
     
-    // Find peak and valley periods
+    // Find peak and valley periods from revenue timeline data
     const maxRevenue = Math.max(...revenueTimelineData.map(point => point.totalRevenue));
     const minRevenue = Math.min(...revenueTimelineData.map(point => point.totalRevenue));
     
     const peakPeriod = revenueTimelineData.find(point => point.totalRevenue === maxRevenue);
     const valleyPeriod = revenueTimelineData.find(point => point.totalRevenue === minRevenue);
+    
+    // Find peak contract count periods
+    const maxContracts = Math.max(...revenueTimelineData.map(point => point.totalContracts));
+    const minContracts = Math.min(...revenueTimelineData.map(point => point.totalContracts));
+    
+    const peakContractPeriod = revenueTimelineData.find(point => point.totalContracts === maxContracts);
+    const valleyContractPeriod = revenueTimelineData.find(point => point.totalContracts === minContracts);
     
     return {
       activeContracts: activeContracts.length,
@@ -198,7 +214,11 @@ const ContractorTimeline = ({ contractor, profile }) => {
       peakPeriod: peakPeriod ? format(peakPeriod.date, 'MMM yyyy') : 'N/A',
       valleyPeriod: valleyPeriod ? format(valleyPeriod.date, 'MMM yyyy') : 'N/A',
       peakRevenue: maxRevenue,
-      valleyRevenue: minRevenue
+      valleyRevenue: minRevenue,
+      peakContractPeriod: peakContractPeriod ? format(peakContractPeriod.date, 'MMM yyyy') : 'N/A',
+      valleyContractPeriod: valleyContractPeriod ? format(valleyContractPeriod.date, 'MMM yyyy') : 'N/A',
+      maxContracts,
+      minContracts
     };
   }, [timelineData, revenueTimelineData]);
 
@@ -226,6 +246,30 @@ const ContractorTimeline = ({ contractor, profile }) => {
     if (isAfter(now, endDate)) return '#94a3b8'; // gray-400 - completed
     if (differenceInDays(endDate, now) < 90) return '#f97316'; // orange-500 - ending soon
     return '#10b981'; // emerald-500 - active
+  };
+
+  // Calculate SVG path for the revenue area chart
+  const generateRevenueAreaPath = (data, height, width, property) => {
+    if (!data || data.length === 0) return '';
+    
+    const maxValue = Math.max(...data.map(d => d.totalRevenue));
+    const xStep = width / (data.length - 1);
+    
+    let path = `M 0 ${height}`;
+    
+    data.forEach((point, index) => {
+      const x = index * xStep;
+      const y = height - (point[property] / maxValue * height);
+      
+      if (index === 0) {
+        path += ` L ${x} ${y}`;
+      } else {
+        path += ` L ${x} ${y}`;
+      }
+    });
+    
+    path += ` L ${width} ${height} Z`;
+    return path;
   };
 
   if (loading) {
@@ -371,15 +415,15 @@ const ContractorTimeline = ({ contractor, profile }) => {
           </div>
           <div className="text-center p-4 bg-orange-50 rounded-lg">
             <div className="text-lg font-bold text-orange-600">
-              {summaryStats.peakPeriod}
+              {summaryStats.peakContractPeriod}
             </div>
-            <div className="text-sm text-orange-800">Peak Period</div>
+            <div className="text-sm text-orange-800">Peak Contracts ({summaryStats.maxContracts})</div>
           </div>
           <div className="text-center p-4 bg-red-50 rounded-lg">
             <div className="text-lg font-bold text-red-600">
-              {summaryStats.valleyPeriod}
+              {summaryStats.valleyContractPeriod}
             </div>
-            <div className="text-sm text-red-800">Lowest Period</div>
+            <div className="text-sm text-red-800">Lowest Activity ({summaryStats.minContracts})</div>
           </div>
           <div className="text-center p-4 bg-gray-50 rounded-lg">
             <div className="text-2xl font-bold text-gray-600">
@@ -405,33 +449,85 @@ const ContractorTimeline = ({ contractor, profile }) => {
       {/* Main Timeline Content */}
       <div className="bg-white rounded-lg shadow">
         {viewMode === 'revenue-timeline' ? (
-          // NEW: Revenue Timeline Chart
+          // Enhanced Revenue Timeline Chart
           <div className="p-6">
             <h3 className="text-lg font-medium text-gray-900 mb-6">
               📈 Revenue Performance Timeline
+              {contractFilter === 'active' && <span className="text-sm text-green-600 ml-2">(Active Contracts in Green)</span>}
+              {contractFilter === 'all' && <span className="text-sm text-gray-600 ml-2">(Active: Green, Completed: Gray)</span>}
             </h3>
             
-            <div className="relative h-80 mb-6 bg-gray-50 rounded-lg p-4">
-              {/* Simple Revenue Chart Placeholder */}
-              <div className="text-center text-gray-500 mt-20">
-                <div className="text-4xl mb-4">📊</div>
-                <p>Revenue Timeline Chart</p>
-                <p className="text-sm">(Advanced SVG chart visualization coming soon)</p>
-                <div className="mt-4 space-y-2">
-                  <div className="flex justify-between">
-                    <span>Peak Revenue Period:</span>
-                    <span className="font-medium">{summaryStats.peakPeriod}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Current Active Revenue:</span>
-                    <span className="font-medium text-green-600">{formatCurrency(summaryStats.activeValue)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Total Lifetime Value:</span>
-                    <span className="font-medium text-blue-600">{formatCurrency(summaryStats.totalValue)}</span>
-                  </div>
+            <div className="relative h-80 mb-6 bg-gray-50 rounded-lg p-4 border">
+              {revenueTimelineData.length > 0 ? (
+                <svg width="100%" height="100%" viewBox="0 0 800 300" className="overflow-visible">
+                  {/* Background grid */}
+                  <defs>
+                    <pattern id="grid" width="40" height="30" patternUnits="userSpaceOnUse">
+                      <path d="M 40 0 L 0 0 0 30" fill="none" stroke="#e5e7eb" strokeWidth="1"/>
+                    </pattern>
+                  </defs>
+                  <rect width="800" height="300" fill="url(#grid)"/>
+                  
+                  {/* Revenue areas */}
+                  <g>
+                    {/* Completed revenue area (gray) */}
+                    <path
+                      d={generateRevenueAreaPath(revenueTimelineData, 280, 780, 'completedRevenue')}
+                      fill="#9ca3af"
+                      fillOpacity="0.6"
+                      transform="translate(10, 10)"
+                    />
+                    
+                    {/* Active revenue area (green) on top */}
+                    <path
+                      d={generateRevenueAreaPath(revenueTimelineData, 280, 780, 'activeRevenue')}
+                      fill="#10b981"
+                      fillOpacity="0.8"
+                      transform="translate(10, 10)"
+                    />
+                    
+                    {/* Total revenue line */}
+                    <path
+                      d={generateRevenueAreaPath(revenueTimelineData, 280, 780, 'totalRevenue').replace('Z', '').replace(/L \d+ \d+ Z/, '')}
+                      fill="none"
+                      stroke="#1f2937"
+                      strokeWidth="2"
+                      transform="translate(10, 10)"
+                    />
+                  </g>
+                  
+                  {/* Y-axis labels */}
+                  <g className="text-xs fill-gray-600">
+                    <text x="5" y="15" textAnchor="start">
+                      {formatCurrency(Math.max(...revenueTimelineData.map(d => d.totalRevenue)))}
+                    </text>
+                    <text x="5" y="155" textAnchor="start">
+                      {formatCurrency(Math.max(...revenueTimelineData.map(d => d.totalRevenue)) / 2)}
+                    </text>
+                    <text x="5" y="295" textAnchor="start">$0</text>
+                  </g>
+                  
+                  {/* X-axis labels */}
+                  <g className="text-xs fill-gray-600">
+                    {revenueTimelineData.filter((_, i) => i % Math.ceil(revenueTimelineData.length / 8) === 0).map((point, index) => (
+                      <text 
+                        key={index} 
+                        x={10 + (index * Math.ceil(revenueTimelineData.length / 8) * (780 / (revenueTimelineData.length - 1)))} 
+                        y="315" 
+                        textAnchor="middle"
+                      >
+                        {format(point.date, 'MMM yy')}
+                      </text>
+                    ))}
+                  </g>
+                </svg>
+              ) : (
+                <div className="text-center text-gray-500 mt-20">
+                  <div className="text-4xl mb-4">📊</div>
+                  <p>Revenue Timeline Chart</p>
+                  <p className="text-sm">No timeline data available</p>
                 </div>
-              </div>
+              )}
             </div>
 
             {/* Legend */}
@@ -464,15 +560,15 @@ const ContractorTimeline = ({ contractor, profile }) => {
               <div className="bg-blue-50 p-4 rounded-lg">
                 <h4 className="font-medium text-blue-900 mb-2">📊 Historical Performance</h4>
                 <div className="text-sm text-blue-800 space-y-1">
-                  <p><strong>Peak Period:</strong> {summaryStats.peakPeriod} ({formatCurrency(summaryStats.peakRevenue)})</p>
-                  <p><strong>Valley Period:</strong> {summaryStats.valleyPeriod} ({formatCurrency(summaryStats.valleyRevenue)})</p>
-                  <p><strong>Growth Trend:</strong> {summaryStats.peakRevenue > summaryStats.valleyRevenue * 2 ? 'High Growth' : 'Stable'}</p>
+                  <p><strong>Peak Activity:</strong> {summaryStats.peakContractPeriod} ({summaryStats.maxContracts} contracts)</p>
+                  <p><strong>Lowest Activity:</strong> {summaryStats.valleyContractPeriod} ({summaryStats.minContracts} contracts)</p>
+                  <p><strong>Growth Pattern:</strong> {summaryStats.maxContracts > summaryStats.minContracts * 2 ? 'High Growth' : 'Stable Business'}</p>
                 </div>
               </div>
             </div>
           </div>
         ) : viewMode === 'gantt' ? (
-          // Gantt Chart View (Existing - but now filtered)
+          // Gantt Chart View (Enhanced to exclude completed contracts when in active mode)
           <div className="p-6">
             <h3 className="text-lg font-medium text-gray-900 mb-6">
               📋 Contract Portfolio Gantt Chart
@@ -551,10 +647,12 @@ const ContractorTimeline = ({ contractor, profile }) => {
                 <div className="w-4 h-4 bg-orange-500 rounded"></div>
                 <span>Ending Soon (&lt;3 months)</span>
               </div>
-              <div className="flex items-center space-x-2">
-                <div className="w-4 h-4 bg-gray-400 rounded"></div>
-                <span>Completed</span>
-              </div>
+              {contractFilter === 'all' && (
+                <div className="flex items-center space-x-2">
+                  <div className="w-4 h-4 bg-gray-400 rounded"></div>
+                  <span>Completed</span>
+                </div>
+              )}
             </div>
             
             {sortedContracts.length > 20 && (
@@ -640,13 +738,13 @@ const ContractorTimeline = ({ contractor, profile }) => {
             worth {formatCurrency(summaryStats.activeValue)} in current revenue.
           </p>
           <p>
-            <strong>Historical Performance:</strong> Peak performance was in {summaryStats.peakPeriod} 
-            with {formatCurrency(summaryStats.peakRevenue)} in monthly revenue.
+            <strong>Peak Performance:</strong> Highest activity was in {summaryStats.peakContractPeriod} 
+            with {summaryStats.maxContracts} simultaneous contracts.
           </p>
           <p>
             <strong>Strategic Insight:</strong> {contractFilter === 'active' ? 
-              'Focus on active contracts to understand current capacity and upcoming recompete schedule.' :
-              'Historical view shows growth patterns and business cycle trends for competitive analysis.'
+              'Active contracts view shows current capacity and near-term recompete schedule for revenue projections.' :
+              'Historical view reveals growth patterns, business cycles, and competitive positioning over time.'
             }
           </p>
         </div>
