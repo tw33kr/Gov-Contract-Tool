@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { format, parseISO, differenceInDays, startOfMonth, endOfMonth, addMonths, subMonths, isAfter, isBefore, addDays } from 'date-fns';
+import { format, parseISO, differenceInDays, differenceInYears, startOfMonth, endOfMonth, addMonths, subMonths, isAfter, isBefore, addDays, startOfYear, addYears, startOfQuarter, addQuarters } from 'date-fns';
 
 const ContractorTimeline = ({ contractor, profile }) => {
   const [viewMode, setViewMode] = useState('revenue-timeline'); // 'revenue-timeline', 'gantt', 'list'
@@ -8,7 +8,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
   const [timelineData, setTimelineData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [zoomLevel, setZoomLevel] = useState('months'); // 'months', 'quarters', 'years'
+  const [zoomLevel, setZoomLevel] = useState('auto'); // 'auto', 'months', 'quarters', 'years'
 
   // Safely extract data from our API response structure
   const contractorData = profile?.contractor || contractor || {};
@@ -94,13 +94,14 @@ const ContractorTimeline = ({ contractor, profile }) => {
     }
   }, [timelineData, contractFilter]);
 
-  // Calculate dynamic time range based on filtered contracts
+  // Calculate dynamic time range based on filtered contracts with smart scaling
   const timeRange = useMemo(() => {
     if (!filteredContracts || filteredContracts.length === 0) {
       const now = new Date();
       return {
         start: subMonths(startOfMonth(now), 6),
-        end: addMonths(endOfMonth(now), 6)
+        end: addMonths(endOfMonth(now), 6),
+        duration: 'short'
       };
     }
 
@@ -110,33 +111,54 @@ const ContractorTimeline = ({ contractor, profile }) => {
     const minStart = new Date(Math.min(...startDates));
     const maxEnd = new Date(Math.max(...endDates));
     
-    // Add minimal padding based on filter type
-    let startPadding, endPadding;
+    // Calculate the span in years to determine appropriate granularity
+    const totalYears = differenceInYears(maxEnd, minStart);
     
-    switch (contractFilter) {
-      case 'active':
-        // For active contracts, start from earliest start date with minimal padding
-        startPadding = 3; // 3 months before
-        endPadding = 6;   // 6 months after for recompete visibility
-        break;
-      case 'ending-soon':
-        // For ending soon, focus on current timeframe
-        startPadding = 6; // 6 months before  
-        endPadding = 12;  // 12 months after
-        break;
-      case 'all':
-      default:
-        // For all contracts, include full range with some padding
-        startPadding = 6;
-        endPadding = 6;
-        break;
+    let startPadding, endPadding, duration;
+    
+    // Dynamic scaling based on total time span
+    if (totalYears <= 3) {
+      // Short duration: monthly granularity with minimal padding
+      startPadding = 3; // 3 months before
+      endPadding = 6;   // 6 months after
+      duration = 'short';
+    } else if (totalYears <= 8) {
+      // Medium duration: quarterly granularity
+      startPadding = 6; // 6 months before
+      endPadding = 12;  // 12 months after
+      duration = 'medium';
+    } else {
+      // Long duration: yearly granularity
+      startPadding = 12; // 12 months before
+      endPadding = 12;   // 12 months after
+      duration = 'long';
     }
     
     return {
       start: subMonths(startOfMonth(minStart), startPadding),
-      end: addMonths(endOfMonth(maxEnd), endPadding)
+      end: addMonths(endOfMonth(maxEnd), endPadding),
+      duration,
+      totalYears: totalYears + Math.ceil((startPadding + endPadding) / 12)
     };
   }, [filteredContracts, contractFilter]);
+
+  // Auto-determine optimal zoom level based on time range
+  const optimalZoomLevel = useMemo(() => {
+    if (zoomLevel !== 'auto') return zoomLevel;
+    
+    if (!timeRange.duration) return 'months';
+    
+    switch (timeRange.duration) {
+      case 'short':
+        return 'months';
+      case 'medium':
+        return 'quarters';
+      case 'long':
+        return 'years';
+      default:
+        return 'months';
+    }
+  }, [timeRange, zoomLevel]);
 
   // Generate revenue timeline data for the area chart
   const revenueTimelineData = useMemo(() => {
@@ -192,33 +214,65 @@ const ContractorTimeline = ({ contractor, profile }) => {
     return timelinePoints;
   }, [timelineData, timeRange]);
 
-  // Generate time scale for Gantt chart based on filtered time range
+  // Generate intelligent time scale for Gantt chart with proper spacing
   const ganttTimeScale = useMemo(() => {
     if (!timeRange.start || !timeRange.end) return [];
     
     const scale = [];
     let current = timeRange.start;
+    const totalYears = timeRange.totalYears || 1;
     
-    while (current <= timeRange.end) {
-      scale.push(new Date(current));
+    // Determine step size based on total duration and zoom level
+    let stepFunction, formatFunction, stepSize;
+    
+    switch (optimalZoomLevel) {
+      case 'months':
+        // For short durations, show monthly markers but limit to reasonable count
+        stepFunction = addMonths;
+        stepSize = totalYears > 5 ? Math.ceil(totalYears / 3) : 1; // Every N months for very long spans
+        formatFunction = (date) => format(date, 'MMM yy');
+        current = startOfMonth(current);
+        break;
+        
+      case 'quarters':
+        // For medium durations, show quarterly markers
+        stepFunction = addQuarters;
+        stepSize = 1;
+        formatFunction = (date) => format(date, 'QQQ yyyy');
+        current = startOfQuarter(current);
+        break;
+        
+      case 'years':
+        // For long durations, show yearly markers
+        stepFunction = addYears;
+        stepSize = Math.max(1, Math.floor(totalYears / 12)); // Max 12 year markers
+        formatFunction = (date) => format(date, 'yyyy');
+        current = startOfYear(current);
+        break;
+        
+      default:
+        stepFunction = addMonths;
+        stepSize = 1;
+        formatFunction = (date) => format(date, 'MMM yy');
+        current = startOfMonth(current);
+    }
+    
+    // Generate scale points with proper spacing
+    const maxMarkers = optimalZoomLevel === 'years' ? 12 : (optimalZoomLevel === 'quarters' ? 20 : 24);
+    let markerCount = 0;
+    
+    while (current <= timeRange.end && markerCount < maxMarkers) {
+      scale.push({
+        date: new Date(current),
+        label: formatFunction(current)
+      });
       
-      switch (zoomLevel) {
-        case 'months':
-          current = addMonths(current, 1);
-          break;
-        case 'quarters':
-          current = addMonths(current, 3);
-          break;
-        case 'years':
-          current = addMonths(current, 12);
-          break;
-        default:
-          current = addMonths(current, 1);
-      }
+      current = stepFunction(current, stepSize);
+      markerCount++;
     }
     
     return scale;
-  }, [timeRange, zoomLevel]);
+  }, [timeRange, optimalZoomLevel]);
 
   // Calculate summary statistics
   const summaryStats = useMemo(() => {
@@ -282,13 +336,17 @@ const ContractorTimeline = ({ contractor, profile }) => {
     };
   }, [timelineData, revenueTimelineData]);
 
-  // Calculate Gantt position for contracts - FIXED ALIGNMENT
+  // Calculate Gantt position for contracts with improved precision
   const calculateGanttPosition = (startDate, endDate) => {
-    if (!timeRange.start || !timeRange.end) return { left: 0, width: 0 };
+    if (!timeRange.start || !timeRange.end || ganttTimeScale.length === 0) {
+      return { left: '0%', width: '0%' };
+    }
     
     const rangeStart = timeRange.start;
     const rangeEnd = timeRange.end;
     const totalDuration = differenceInDays(rangeEnd, rangeStart);
+    
+    if (totalDuration <= 0) return { left: '0%', width: '0%' };
     
     const contractStartDate = parseISO(startDate);
     const contractEndDate = parseISO(endDate);
@@ -297,9 +355,9 @@ const ContractorTimeline = ({ contractor, profile }) => {
     const startOffset = differenceInDays(contractStartDate, rangeStart);
     const duration = differenceInDays(contractEndDate, contractStartDate);
     
-    // Ensure positions are within bounds
+    // Ensure positions are within bounds and have minimum visibility
     const leftPercent = Math.max(0, Math.min(100, (startOffset / totalDuration) * 100));
-    const widthPercent = Math.max(0, Math.min(100 - leftPercent, (duration / totalDuration) * 100));
+    const widthPercent = Math.max(0.5, Math.min(100 - leftPercent, (duration / totalDuration) * 100)); // Min 0.5% width for visibility
     
     return {
       left: `${leftPercent}%`,
@@ -424,6 +482,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
               onChange={(e) => setZoomLevel(e.target.value)}
               className="px-3 py-2 border border-gray-300 rounded-md focus:ring-purple-500 focus:border-purple-500"
             >
+              <option value="auto">Auto Scale ({optimalZoomLevel})</option>
               <option value="months">Monthly View</option>
               <option value="quarters">Quarterly View</option>
               <option value="years">Yearly View</option>
@@ -506,7 +565,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
           </div>
         </div>
 
-        {/* Contract Filter Info */}
+        {/* Timeline Info with Dynamic Scaling Information */}
         <div className="mt-4 p-3 bg-blue-50 rounded-lg">
           <div className="text-sm text-blue-800">
             <strong>Current View:</strong> {
@@ -518,6 +577,9 @@ const ContractorTimeline = ({ contractor, profile }) => {
             }
             <span className="ml-2">
               (Timeline: {format(timeRange.start, 'MMM yyyy')} - {format(timeRange.end, 'MMM yyyy')})
+            </span>
+            <span className="ml-2 font-medium">
+              | Scale: {optimalZoomLevel} ({timeRange.totalYears}+ year span)
             </span>
           </div>
         </div>
@@ -645,12 +707,13 @@ const ContractorTimeline = ({ contractor, profile }) => {
             </div>
           </div>
         ) : viewMode === 'gantt' ? (
-          // FIXED Gantt Chart View with proper alignment
+          // ENHANCED Gantt Chart View with dynamic scaling
           <div className="p-6">
             <h3 className="text-lg font-medium text-gray-900 mb-6">
-              📋 Contract Portfolio Gantt Chart
+              📋 Contract Portfolio Gantt Chart - Dynamic Scaling
               {contractFilter === 'active' && <span className="text-sm text-green-600 ml-2">(Active Contracts Only)</span>}
               {contractFilter === 'ending-soon' && <span className="text-sm text-orange-600 ml-2">(Contracts Ending Within 1 Year)</span>}
+              <span className="text-sm text-purple-600 ml-2">({optimalZoomLevel.charAt(0).toUpperCase() + optimalZoomLevel.slice(1)} Scale)</span>
             </h3>
             
             {sortedContracts.length === 0 ? (
@@ -660,45 +723,54 @@ const ContractorTimeline = ({ contractor, profile }) => {
               </div>
             ) : (
               <>
-                {/* Time Scale Header - FIXED to align with contract bars */}
-                <div className="mb-4 border-b border-gray-200 pb-2">
-                  <div className="flex text-xs text-gray-500 font-medium relative">
-                    <div className="w-64 flex-shrink-0"></div> {/* Space for contract labels */}
-                    <div className="flex-1 flex">
-                      {ganttTimeScale.map((date, index) => {
-                        const position = ((index / (ganttTimeScale.length - 1)) * 100);
-                        return (
-                          <div 
-                            key={index}
-                            className="absolute text-center"
-                            style={{ 
-                              left: `${position}%`,
-                              transform: 'translateX(-50%)',
-                              minWidth: '60px'
-                            }}
-                          >
-                            {zoomLevel === 'months' && format(date, 'MMM yyyy')}
-                            {zoomLevel === 'quarters' && format(date, 'QQQ yyyy')}
-                            {zoomLevel === 'years' && format(date, 'yyyy')}
-                          </div>
-                        );
-                      })}
+                {/* Enhanced Time Scale Header with proper spacing */}
+                <div className="mb-4 border-b border-gray-200 pb-2 bg-gray-50 rounded-t-lg">
+                  <div className="text-xs text-gray-500 font-medium relative h-12 flex items-end">
+                    <div className="w-64 flex-shrink-0 text-center border-r border-gray-300 py-2">
+                      <strong>Contract Details</strong>
+                    </div>
+                    <div className="flex-1 relative px-2">
+                      <div className="text-center mb-1 text-gray-700 font-semibold">
+                        Timeline: {format(timeRange.start, 'MMM yyyy')} - {format(timeRange.end, 'MMM yyyy')} 
+                        ({optimalZoomLevel.charAt(0).toUpperCase() + optimalZoomLevel.slice(1)} View)
+                      </div>
+                      <div className="relative">
+                        {ganttTimeScale.map((scaleItem, index) => {
+                          const position = ganttTimeScale.length > 1 ? (index / (ganttTimeScale.length - 1)) * 100 : 50;
+                          return (
+                            <div 
+                              key={index}
+                              className="absolute text-center border-l border-gray-300 pl-1"
+                              style={{ 
+                                left: `${position}%`,
+                                transform: 'translateX(-50%)',
+                                minWidth: optimalZoomLevel === 'years' ? '40px' : '50px'
+                              }}
+                            >
+                              <div className="text-gray-600 font-medium">
+                                {scaleItem.label}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   </div>
                 </div>
 
-                {/* Contract Gantt Bars - FIXED positioning */}
-                <div className="space-y-2 relative" style={{ minHeight: Math.max(300, sortedContracts.length * 40) }}>
+                {/* Contract Gantt Bars with improved alignment */}
+                <div className="space-y-1 relative overflow-x-auto" style={{ minHeight: Math.max(300, sortedContracts.slice(0, 50).length * 36) }}>
                   {sortedContracts.slice(0, 50).map((contract, index) => {
                     const position = calculateGanttPosition(contract.start_date, contract.end_date);
                     const color = getStatusColor(contract);
+                    const isShortContract = parseFloat(position.width) < 2; // Less than 2% width
                     
                     return (
-                      <div key={contract.id || index} className="relative h-8 border-b border-gray-100 last:border-b-0">
+                      <div key={contract.id || index} className="relative h-8 hover:bg-gray-50 group">
                         {/* Contract Label */}
-                        <div className="absolute left-0 top-0 w-64 h-8 flex items-center px-3 bg-gray-50 border-r border-gray-200 z-10">
+                        <div className="absolute left-0 top-0 w-64 h-8 flex items-center px-3 bg-white border-r border-gray-200 z-20">
                           <div className="truncate">
-                            <div className="text-xs font-medium text-gray-900 truncate">
+                            <div className="text-xs font-medium text-gray-900 truncate" title={contract.title || contract.id}>
                               {contract.title || contract.id}
                             </div>
                             <div className="text-xs text-gray-500">
@@ -707,24 +779,32 @@ const ContractorTimeline = ({ contractor, profile }) => {
                           </div>
                         </div>
                         
-                        {/* Gantt Bar - FIXED to align with time scale */}
-                        <div className="absolute left-64 top-0 right-0 h-8 flex items-center">
+                        {/* Gantt Bar with enhanced positioning */}
+                        <div className="absolute left-64 top-0 right-0 h-8 flex items-center px-2">
                           <div className="relative w-full h-full">
                             <div
-                              className="absolute rounded-md shadow-sm border border-white flex items-center px-2 text-white text-xs font-medium overflow-hidden"
+                              className={`absolute rounded-sm shadow-sm border border-white flex items-center px-1 text-white text-xs font-medium overflow-hidden transition-all duration-200 hover:shadow-md ${
+                                isShortContract ? 'min-w-1' : ''
+                              }`}
                               style={{
                                 left: position.left,
                                 width: position.width,
                                 height: '24px',
                                 backgroundColor: color,
                                 top: '2px',
-                                minWidth: '2px' // Ensure very short contracts are visible
+                                minWidth: isShortContract ? '4px' : '2px', // Ensure very short contracts are visible
+                                zIndex: 10
                               }}
-                              title={`${contract.title}\n${formatDate(contract.start_date)} - ${formatDate(contract.end_date)}\n${formatCurrency(contract.amount)}`}
+                              title={`${contract.title}\n${formatDate(contract.start_date)} - ${formatDate(contract.end_date)}\n${formatCurrency(contract.amount)}\nDuration: ${differenceInDays(parseISO(contract.end_date), parseISO(contract.start_date))} days`}
                             >
-                              <span className="truncate text-xs">
-                                {format(parseISO(contract.start_date), 'MMM yy')} - {format(parseISO(contract.end_date), 'MMM yy')}
-                              </span>
+                              {!isShortContract && (
+                                <span className="truncate text-xs">
+                                  {optimalZoomLevel === 'years' ? 
+                                    format(parseISO(contract.start_date), 'yyyy') :
+                                    `${format(parseISO(contract.start_date), 'MMM yy')} - ${format(parseISO(contract.end_date), 'MMM yy')}`
+                                  }
+                                </span>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -733,27 +813,41 @@ const ContractorTimeline = ({ contractor, profile }) => {
                   })}
                 </div>
 
-                {/* Legend */}
-                <div className="mt-6 flex flex-wrap gap-4 text-sm">
-                  <div className="flex items-center space-x-2">
-                    <div className="w-4 h-4 bg-emerald-500 rounded"></div>
-                    <span>Active Contracts</span>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <div className="w-4 h-4 bg-orange-500 rounded"></div>
-                    <span>Ending Soon (&lt;3 months)</span>
-                  </div>
-                  {contractFilter === 'all' && (
+                {/* Enhanced Legend with time scale info */}
+                <div className="mt-6 space-y-3">
+                  <div className="flex flex-wrap gap-4 text-sm">
                     <div className="flex items-center space-x-2">
-                      <div className="w-4 h-4 bg-gray-400 rounded"></div>
-                      <span>Completed</span>
+                      <div className="w-4 h-4 bg-emerald-500 rounded"></div>
+                      <span>Active Contracts</span>
                     </div>
-                  )}
+                    <div className="flex items-center space-x-2">
+                      <div className="w-4 h-4 bg-orange-500 rounded"></div>
+                      <span>Ending Soon (&lt;3 months)</span>
+                    </div>
+                    {contractFilter === 'all' && (
+                      <div className="flex items-center space-x-2">
+                        <div className="w-4 h-4 bg-gray-400 rounded"></div>
+                        <span>Completed</span>
+                      </div>
+                    )}
+                  </div>
+                  
+                  <div className="text-sm text-gray-600 bg-gray-50 p-3 rounded-lg">
+                    <strong>Dynamic Scaling:</strong> {
+                      optimalZoomLevel === 'months' ? 
+                        `Monthly view for short-term perspective (${timeRange.totalYears} year span)` :
+                      optimalZoomLevel === 'quarters' ?
+                        `Quarterly view for medium-term perspective (${timeRange.totalYears} year span)` :
+                        `Yearly view for long-term perspective (${timeRange.totalYears}+ year span)`
+                    }
+                    {ganttTimeScale.length > 0 && ` | ${ganttTimeScale.length} time markers displayed`}
+                  </div>
                 </div>
                 
                 {sortedContracts.length > 50 && (
-                  <div className="mt-4 text-sm text-gray-600 text-center">
-                    Showing first 50 contracts. Switch to Contract List view to see all {sortedContracts.length} contracts.
+                  <div className="mt-4 text-sm text-gray-600 text-center bg-yellow-50 p-3 rounded-lg">
+                    <strong>Performance Note:</strong> Showing first 50 contracts for optimal performance. 
+                    Switch to Contract List view to see all {sortedContracts.length} contracts.
                   </div>
                 )}
               </>
@@ -842,11 +936,11 @@ const ContractorTimeline = ({ contractor, profile }) => {
             with {summaryStats.maxContracts} simultaneous contracts.
           </p>
           <p>
-            <strong>Strategic Insight:</strong> {contractFilter === 'active' ? 
-              'Active contracts view shows current capacity and near-term recompete schedule for revenue projections.' :
-              contractFilter === 'ending-soon' ?
-              'Ending soon view focuses on upcoming recompete opportunities and transition planning.' :
-              'Historical view reveals growth patterns, business cycles, and competitive positioning over time.'
+            <strong>Dynamic Scaling Insight:</strong> {timeRange.totalYears <= 3 ? 
+              'Short timeline (≤3 years) uses monthly granularity for detailed analysis.' :
+              timeRange.totalYears <= 8 ?
+              'Medium timeline (3-8 years) uses quarterly granularity for balanced view.' :
+              'Long timeline (8+ years) uses yearly granularity for broad perspective, optimizing readability across decades of contracting history.'
             }
           </p>
         </div>
