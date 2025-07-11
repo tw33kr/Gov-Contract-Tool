@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { format, parseISO, differenceInDays, startOfMonth, endOfMonth, eachMonthOfInterval, addMonths, subMonths } from 'date-fns';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { format, parseISO, differenceInDays, startOfMonth, endOfMonth, addMonths, subMonths } from 'date-fns';
 
 const ContractorTimeline = ({ contractor, profile }) => {
   const [viewMode, setViewMode] = useState('gantt'); // 'gantt', 'timeline', or 'list'
@@ -13,17 +13,10 @@ const ContractorTimeline = ({ contractor, profile }) => {
 
   // Safely extract data from our API response structure
   const contractorData = profile?.contractor || contractor || {};
-  const profileData = profile?.profile || profile || {};
   const contractorName = contractorData.name || contractor?.name || 'Unknown Contractor';
   
   // Fetch complete timeline data when component loads
-  useEffect(() => {
-    if (contractorName && contractorName !== 'Unknown Contractor') {
-      fetchTimelineData();
-    }
-  }, [contractorName]);
-
-  const fetchTimelineData = async () => {
+  const fetchTimelineData = useCallback(async () => {
     setLoading(true);
     setError(null);
     
@@ -58,7 +51,13 @@ const ContractorTimeline = ({ contractor, profile }) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [contractorName]);
+
+  useEffect(() => {
+    if (contractorName && contractorName !== 'Unknown Contractor') {
+      fetchTimelineData();
+    }
+  }, [contractorName, fetchTimelineData]);
 
   const formatCurrency = (amount) => {
     if (!amount) return '$0';
