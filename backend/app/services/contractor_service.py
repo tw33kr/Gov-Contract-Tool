@@ -40,7 +40,9 @@ class ContractorService:
                 primary_agencies TEXT,
                 primary_naics TEXT,
                 profile_data TEXT,
-                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                complete_data_fetched BOOLEAN DEFAULT FALSE,
+                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_complete_fetch TIMESTAMP
             )
         ''')
         
@@ -61,14 +63,17 @@ class ContractorService:
                 naics_code TEXT,
                 place_of_performance TEXT,
                 competition_type TEXT,
+                recipient_hash TEXT,
                 fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (contractor_name) REFERENCES contractor_profiles (contractor_name)
+                FOREIGN KEY (contractor_name) REFERENCES contractor_profiles (contractor_name),
+                UNIQUE(contractor_name, award_id)
             )
         ''')
         
         # Create index for faster searches
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_contractor_name ON contractor_awards (contractor_name)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_contractor_date ON contractor_awards (start_date)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_award_id ON contractor_awards (award_id)')
         
         conn.commit()
         conn.close()
@@ -128,10 +133,452 @@ class ContractorService:
             logger.error(f"❌ Error searching contractors: {str(e)}")
             return self._get_cached_contractors(name_query or "", limit)
     
+    def get_contractor_profile(self, contractor_name: str, fetch_complete_data: bool = False) -> Optional[Dict[str, Any]]:
+        """
+        Get detailed profile for a specific contractor with optional complete data fetch
+        
+        Args:
+            contractor_name: Name of the contractor
+            fetch_complete_data: If True, fetches ALL awards via pagination (may take longer)
+        """
+        logger.info(f"📊 Getting profile for contractor: {contractor_name} (complete_data: {fetch_complete_data})")
+        
+        try:
+            # Check if we have complete data cached
+            if fetch_complete_data:
+                complete_profile = self._get_complete_contractor_profile(contractor_name)
+                if complete_profile:
+                    logger.info(f"📋 Using complete cached profile for {contractor_name}")
+                    return complete_profile
+            
+            # First check if we have this contractor cached from a recent search
+            cached_profile = self._get_cached_contractor_profile(contractor_name)
+            if cached_profile and not fetch_complete_data:
+                logger.info(f"📋 Using cached profile for {contractor_name}")
+                return cached_profile
+            
+            # If not cached or need complete data, search for the contractor
+            logger.info(f"🔍 {'Fetching complete data' if fetch_complete_data else 'No cached data, searching'} for: {contractor_name}")
+            
+            # First, find the contractor via autocomplete
+            recipients = self._find_recipients_fast(contractor_name)
+            if not recipients:
+                return None
+                
+            recipient = recipients[0]  # Use the first (best) match
+            
+            if fetch_complete_data:
+                # Fetch ALL awards via pagination
+                profile = self._get_complete_contractor_data(recipient)
+            else:
+                # Get basic data (up to 100 awards)
+                profile = self._get_contractor_spending_data(recipient)
+            
+            if profile:
+                logger.info(f"✅ Retrieved {'complete' if fetch_complete_data else 'basic'} profile for {contractor_name}: {profile['total_awards']} awards, ${profile['total_value']:,.0f} total value")
+                return profile
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ Error getting contractor profile: {str(e)}")
+            return self._get_cached_contractor_profile(contractor_name)
+    
+    def _get_complete_contractor_data(self, recipient: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Fetch ALL awards for a contractor using pagination to get complete dataset
+        """
+        recipient_name = recipient.get('recipient_name', 'Unknown')
+        recipient_hash = recipient.get('recipient_hash')
+        
+        logger.info(f"🔄 Fetching COMPLETE dataset for: {recipient_name}")
+        
+        try:
+            all_awards = []
+            page = 1
+            page_size = 100
+            total_pages = None
+            
+            # Check if we already have complete data cached
+            cached_complete = self._get_complete_cached_awards(recipient_name)
+            if cached_complete:
+                logger.info(f"📋 Found complete cached data: {len(cached_complete)} awards")
+                return self._build_complete_profile(recipient, cached_complete)
+            
+            while True:
+                logger.info(f"📄 Fetching page {page} for {recipient_name}...")
+                
+                # Build payload for this page
+                payload = {
+                    "filters": {
+                        "recipient_search_text": [recipient_name],
+                        "award_type_codes": ["A", "B", "C", "D"],  # Contract types
+                        "time_period": [{
+                            "start_date": "2018-01-01",  # Extended date range for complete data
+                            "end_date": datetime.now().strftime("%Y-%m-%d")
+                        }]
+                    },
+                    "fields": [
+                        "Award ID",
+                        "Recipient Name", 
+                        "Award Amount",
+                        "Start Date",
+                        "End Date",
+                        "Awarding Agency",
+                        "Awarding Sub Agency",
+                        "Award Type",
+                        "Description",
+                        "NAICS Code",
+                        "NAICS Description",
+                        "Place of Performance",
+                        "Competition Type"
+                    ],
+                    "page": page,
+                    "limit": page_size,
+                    "sort": "Award Amount",
+                    "order": "desc"
+                }
+                
+                # Add recipient hash if available for more precise matching
+                if recipient_hash:
+                    payload["filters"]["recipient_hash"] = [recipient_hash]
+                
+                response = requests.post(
+                    self.spending_by_award_url,
+                    json=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "User-Agent": "Federal-Contract-Research-Tool/1.0"
+                    },
+                    timeout=30  # Longer timeout for pagination
+                )
+                
+                if response.status_code != 200:
+                    logger.error(f"❌ API error on page {page}: {response.status_code}")
+                    break
+                
+                data = response.json()
+                page_awards = data.get('results', [])
+                
+                if not page_awards:
+                    logger.info(f"📄 No more awards found on page {page}")
+                    break
+                
+                all_awards.extend(page_awards)
+                
+                # Check if we have more pages
+                total_count = data.get('page_metadata', {}).get('total', 0)
+                if total_pages is None:
+                    total_pages = (total_count + page_size - 1) // page_size  # Ceiling division
+                    logger.info(f"📊 Total expected awards: {total_count}, Total pages: {total_pages}")
+                
+                logger.info(f"📄 Page {page} completed: {len(page_awards)} awards (total so far: {len(all_awards)})")
+                
+                # Stop if we've reached the end
+                if len(page_awards) < page_size or page >= total_pages:
+                    break
+                
+                page += 1
+                
+                # Rate limiting to avoid overwhelming the API
+                time.sleep(0.5)
+                
+                # Safety limit to prevent infinite loops
+                if page > 50:  # Max 5000 awards (50 pages * 100 per page)
+                    logger.warning(f"⚠️ Reached safety limit of 50 pages for {recipient_name}")
+                    break
+            
+            logger.info(f"✅ Complete fetch finished: {len(all_awards)} total awards for {recipient_name}")
+            
+            # Cache all awards for future use
+            self._cache_complete_awards(recipient_name, all_awards, recipient_hash)
+            
+            # Build comprehensive profile
+            return self._build_complete_profile(recipient, all_awards)
+            
+        except Exception as e:
+            logger.error(f"❌ Error in complete data fetch for {recipient_name}: {str(e)}")
+            return None
+    
+    def _build_complete_profile(self, recipient: Dict[str, Any], awards: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Build a comprehensive contractor profile from complete awards data
+        """
+        recipient_name = recipient.get('recipient_name', 'Unknown')
+        
+        profile = {
+            "name": recipient_name,
+            "recipient_hash": recipient.get('recipient_hash'),
+            "uei": recipient.get('recipient_uei'),
+            "total_awards": len(awards),
+            "total_value": 0.0,
+            "agencies": set(),
+            "award_types": set(),
+            "naics_codes": set(),
+            "locations": set(),
+            "all_awards": [],  # Store ALL awards for timeline analysis
+            "recent_awards": [],  # Store recent 20 for compatibility
+            "first_award_date": None,
+            "latest_award_date": None,
+            "year_breakdown": {},  # Awards by year
+            "agency_breakdown": {},  # Awards by agency
+            "contract_durations": []  # For timeline analysis
+        }
+        
+        # Process all awards
+        for award in awards:
+            # Process award amount
+            award_amount = award.get("Award Amount", 0)
+            if award_amount:
+                try:
+                    profile["total_value"] += float(award_amount)
+                except (ValueError, TypeError):
+                    pass
+            
+            # Collect metadata
+            if award.get("Awarding Agency"):
+                profile["agencies"].add(award["Awarding Agency"])
+                # Track agency breakdown
+                agency = award["Awarding Agency"]
+                profile["agency_breakdown"][agency] = profile["agency_breakdown"].get(agency, 0) + 1
+            
+            if award.get("Award Type"):
+                profile["award_types"].add(award["Award Type"])
+            if award.get("NAICS Code"):
+                naics_display = award.get("NAICS Description", award["NAICS Code"])
+                profile["naics_codes"].add(f"{award['NAICS Code']}: {naics_display}")
+            if award.get("Place of Performance"):
+                profile["locations"].add(award["Place of Performance"])
+            
+            # Track date range and yearly breakdown
+            start_date = award.get("Start Date")
+            if start_date:
+                try:
+                    year = datetime.fromisoformat(start_date.replace('Z', '+00:00')).year
+                    profile["year_breakdown"][year] = profile["year_breakdown"].get(year, 0) + 1
+                except:
+                    pass
+                    
+                if not profile["first_award_date"] or start_date < profile["first_award_date"]:
+                    profile["first_award_date"] = start_date
+                if not profile["latest_award_date"] or start_date > profile["latest_award_date"]:
+                    profile["latest_award_date"] = start_date
+            
+            # Store complete award details for timeline analysis
+            award_detail = {
+                "award_id": award.get("Award ID", ""),
+                "title": award.get("Description", "")[:100] if award.get("Description") else "",
+                "amount": award_amount,
+                "agency": award.get("Awarding Agency", ""),
+                "start_date": start_date,
+                "end_date": award.get("End Date"),
+                "award_type": award.get("Award Type", ""),
+                "naics_code": award.get("NAICS Code", ""),
+                "place_of_performance": award.get("Place of Performance", ""),
+                "competition_type": award.get("Competition Type", "")
+            }
+            
+            profile["all_awards"].append(award_detail)
+            
+            # Add to contract durations for timeline analysis
+            if start_date and award.get("End Date"):
+                profile["contract_durations"].append({
+                    "start": start_date,
+                    "end": award.get("End Date"),
+                    "amount": award_amount,
+                    "title": award_detail["title"]
+                })
+        
+        # Sort awards by date (most recent first) and take top 20 for recent_awards
+        sorted_awards = sorted(profile["all_awards"], 
+                             key=lambda x: x.get("start_date", "") or "1900-01-01", 
+                             reverse=True)
+        profile["recent_awards"] = sorted_awards[:20]
+        
+        # Convert sets to lists for JSON serialization
+        return {
+            "name": profile["name"],
+            "recipient_hash": profile["recipient_hash"],
+            "uei": profile["uei"],
+            "total_awards": profile["total_awards"],
+            "total_value": profile["total_value"],
+            "first_award_date": profile["first_award_date"],
+            "latest_award_date": profile["latest_award_date"],
+            "primary_agencies": list(profile["agencies"])[:10],
+            "award_types": list(profile["award_types"]),
+            "naics_codes": list(profile["naics_codes"])[:10],
+            "locations": list(profile["locations"])[:10],
+            "recent_awards": profile["recent_awards"],
+            "all_awards": profile["all_awards"],  # Complete dataset
+            "year_breakdown": profile["year_breakdown"],
+            "agency_breakdown": profile["agency_breakdown"],
+            "contract_durations": profile["contract_durations"],
+            "is_complete_data": True
+        }
+    
+    def _cache_complete_awards(self, contractor_name: str, awards: List[Dict[str, Any]], recipient_hash: str = None):
+        """
+        Cache complete awards dataset for a contractor
+        """
+        try:
+            conn = sqlite3.connect(self.database_path)
+            cursor = conn.cursor()
+            
+            # Clear existing awards for this contractor
+            cursor.execute("DELETE FROM contractor_awards WHERE contractor_name = ?", (contractor_name,))
+            
+            # Insert all awards
+            for award in awards:
+                cursor.execute(
+                    """INSERT OR REPLACE INTO contractor_awards 
+                       (contractor_name, award_id, title, description, award_amount, awarding_agency, 
+                        awarding_subagency, start_date, end_date, award_type, naics_code, 
+                        place_of_performance, competition_type, recipient_hash) 
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        contractor_name,
+                        award.get("Award ID", ""),
+                        award.get("Description", "")[:200] if award.get("Description") else "",
+                        award.get("Description", ""),
+                        award.get("Award Amount", 0),
+                        award.get("Awarding Agency", ""),
+                        award.get("Awarding Sub Agency", ""),
+                        award.get("Start Date"),
+                        award.get("End Date"),
+                        award.get("Award Type", ""),
+                        award.get("NAICS Code", ""),
+                        award.get("Place of Performance", ""),
+                        award.get("Competition Type", ""),
+                        recipient_hash
+                    )
+                )
+            
+            # Update contractor profile to mark complete data as fetched
+            cursor.execute(
+                """UPDATE contractor_profiles 
+                   SET complete_data_fetched = TRUE, last_complete_fetch = ? 
+                   WHERE contractor_name = ?""",
+                (datetime.now().isoformat(), contractor_name)
+            )
+            
+            conn.commit()
+            conn.close()
+            
+            logger.info(f"💾 Cached {len(awards)} complete awards for {contractor_name}")
+            
+        except Exception as e:
+            logger.error(f"❌ Error caching complete awards: {str(e)}")
+    
+    def _get_complete_cached_awards(self, contractor_name: str) -> Optional[List[Dict[str, Any]]]:
+        """
+        Get complete cached awards for a contractor if available and recent
+        """
+        try:
+            conn = sqlite3.connect(self.database_path)
+            cursor = conn.cursor()
+            
+            # Check if we have complete data and when it was fetched
+            cursor.execute(
+                """SELECT complete_data_fetched, last_complete_fetch 
+                   FROM contractor_profiles 
+                   WHERE contractor_name = ?""",
+                (contractor_name,)
+            )
+            row = cursor.fetchone()
+            
+            if not row or not row[0]:  # No complete data fetched
+                conn.close()
+                return None
+            
+            # Check if data is recent (less than 24 hours old)
+            last_fetch = row[1]
+            if last_fetch:
+                try:
+                    fetch_time = datetime.fromisoformat(last_fetch)
+                    age_hours = (datetime.now() - fetch_time).total_seconds() / 3600
+                    
+                    if age_hours > 24:  # Data is older than 24 hours
+                        logger.info(f"🔄 Complete cached data for {contractor_name} is {age_hours:.1f} hours old, will refresh")
+                        conn.close()
+                        return None
+                except:
+                    pass
+            
+            # Get all cached awards
+            cursor.execute(
+                """SELECT award_id, title, award_amount, awarding_agency, start_date, end_date, 
+                          award_type, naics_code, place_of_performance, competition_type
+                   FROM contractor_awards 
+                   WHERE contractor_name = ?
+                   ORDER BY start_date DESC""",
+                (contractor_name,)
+            )
+            
+            rows = cursor.fetchall()
+            conn.close()
+            
+            if rows:
+                awards = []
+                for row in rows:
+                    awards.append({
+                        "Award ID": row[0],
+                        "Description": row[1],
+                        "Award Amount": row[2],
+                        "Awarding Agency": row[3],
+                        "Start Date": row[4],
+                        "End Date": row[5],
+                        "Award Type": row[6],
+                        "NAICS Code": row[7],
+                        "Place of Performance": row[8],
+                        "Competition Type": row[9]
+                    })
+                
+                logger.info(f"📋 Retrieved {len(awards)} cached complete awards for {contractor_name}")
+                return awards
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ Error getting complete cached awards: {str(e)}")
+            return None
+    
+    def _get_complete_contractor_profile(self, contractor_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Get complete contractor profile from cache if available
+        """
+        try:
+            # Get cached awards
+            cached_awards = self._get_complete_cached_awards(contractor_name)
+            if not cached_awards:
+                return None
+            
+            # Get basic contractor info
+            conn = sqlite3.connect(self.database_path)
+            cursor = conn.cursor()
+            
+            cursor.execute(
+                "SELECT recipient_hash, uei FROM contractor_profiles WHERE contractor_name = ?",
+                (contractor_name,)
+            )
+            row = cursor.fetchone()
+            conn.close()
+            
+            # Build recipient object
+            recipient = {
+                "recipient_name": contractor_name,
+                "recipient_hash": row[0] if row else None,
+                "recipient_uei": row[1] if row else None
+            }
+            
+            # Build complete profile from cached data
+            return self._build_complete_profile(recipient, cached_awards)
+            
+        except Exception as e:
+            logger.error(f"❌ Error getting complete contractor profile: {str(e)}")
+            return None
+
     def _normalize_contractor_name(self, name: str) -> str:
-        """
-        Normalize contractor names to detect duplicates
-        """
+        """Normalize contractor names to detect duplicates"""
         if not name:
             return ""
         
@@ -157,10 +604,7 @@ class ContractorService:
         return normalized
     
     def _find_recipients_fast(self, search_text: str) -> List[Dict[str, Any]]:
-        """
-        Use USASpending.gov's recipient autocomplete API for fast contractor lookup
-        This is what the actual website uses for instant search results
-        """
+        """Use USASpending.gov's recipient autocomplete API for fast contractor lookup"""
         logger.info(f"🔍 Using recipient autocomplete for: '{search_text}'")
         
         try:
@@ -201,15 +645,12 @@ class ContractorService:
             return []
     
     def _get_contractor_spending_data(self, recipient: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """
-        Get comprehensive spending data for a specific recipient
-        Uses the spending_by_award endpoint for detailed contract information
-        """
+        """Get basic spending data for a specific recipient (up to 100 awards)"""
         recipient_name = recipient.get('recipient_name', 'Unknown')
         recipient_hash = recipient.get('recipient_hash')
         recipient_uei = recipient.get('recipient_uei')
         
-        logger.info(f"📊 Getting spending data for: {recipient_name}")
+        logger.info(f"📊 Getting basic spending data for: {recipient_name}")
         
         try:
             # Build filter for this specific recipient
@@ -237,7 +678,7 @@ class ContractorService:
                     "Place of Performance"
                 ],
                 "page": 1,
-                "limit": 100,  # Get up to 100 awards for analysis
+                "limit": 100,  # Basic limit for fast searches
                 "sort": "Award Amount",
                 "order": "desc"
             }
@@ -282,9 +723,7 @@ class ContractorService:
             return None
     
     def _process_recipient_awards(self, recipient: Dict[str, Any], awards: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Process award data into a comprehensive contractor profile
-        """
+        """Process award data into a basic contractor profile"""
         recipient_name = recipient.get('recipient_name', 'Unknown')
         
         profile = {
@@ -359,38 +798,8 @@ class ContractorService:
             "recent_awards": profile["awards"]
         }
     
-    def get_contractor_profile(self, contractor_name: str) -> Optional[Dict[str, Any]]:
-        """
-        Get detailed profile for a specific contractor with smart caching
-        """
-        logger.info(f"📊 Getting detailed profile for contractor: {contractor_name}")
-        
-        try:
-            # First check if we have this contractor cached from a recent search
-            cached_profile = self._get_cached_contractor_profile(contractor_name)
-            if cached_profile:
-                logger.info(f"📋 Using cached profile for {contractor_name}")
-                return cached_profile
-            
-            # If not cached, search for the contractor
-            logger.info(f"🔍 No cached data, searching for: {contractor_name}")
-            contractors = self.search_contractors(contractor_name, limit=1)
-            
-            if contractors:
-                profile = contractors[0]
-                logger.info(f"✅ Retrieved profile for {contractor_name}: {profile['total_awards']} awards, ${profile['total_value']:,.0f} total value")
-                return profile
-            
-            return None
-            
-        except Exception as e:
-            logger.error(f"❌ Error getting contractor profile: {str(e)}")
-            return self._get_cached_contractor_profile(contractor_name)
-    
     def _cache_contractor_profile(self, profile: Dict[str, Any]) -> None:
-        """
-        Cache contractor profile for fast retrieval
-        """
+        """Cache contractor profile for fast retrieval"""
         try:
             conn = sqlite3.connect(self.database_path)
             cursor = conn.cursor()
@@ -421,9 +830,7 @@ class ContractorService:
             logger.error(f"❌ Error caching contractor profile: {str(e)}")
     
     def _get_cached_contractor_profile(self, contractor_name: str) -> Optional[Dict[str, Any]]:
-        """
-        Get contractor profile from cache with flexible name matching
-        """
+        """Get contractor profile from cache with flexible name matching"""
         try:
             conn = sqlite3.connect(self.database_path)
             cursor = conn.cursor()
@@ -466,9 +873,7 @@ class ContractorService:
             return None
     
     def _get_popular_contractors(self, limit: int) -> List[Dict[str, Any]]:
-        """
-        Get popular contractors when no specific search is provided
-        """
+        """Get popular contractors when no specific search is provided"""
         logger.info(f"📋 Getting popular contractors (limit: {limit})")
         
         # List of well-known defense and IT contractors
@@ -512,9 +917,7 @@ class ContractorService:
         return results[:limit]
     
     def _get_cached_contractors(self, name_query: str, limit: int) -> List[Dict[str, Any]]:
-        """
-        Get contractors from cache (fallback)
-        """
+        """Get contractors from cache (fallback)"""
         try:
             conn = sqlite3.connect(self.database_path)
             cursor = conn.cursor()
@@ -548,49 +951,3 @@ class ContractorService:
         except Exception as e:
             logger.error(f"❌ Error getting cached contractors: {str(e)}")
             return []
-    
-    def test_contractor_search(self, contractor_name: str) -> Dict[str, Any]:
-        """
-        Test endpoint for debugging contractor searches with detailed logging
-        """
-        logger.info(f"🧪 TESTING contractor search for: {contractor_name}")
-        
-        try:
-            # Step 1: Test autocomplete
-            logger.info("Step 1: Testing recipient autocomplete...")
-            recipients = self._find_recipients_fast(contractor_name)
-            
-            if not recipients:
-                return {
-                    "test_query": contractor_name,
-                    "step_1_autocomplete": "FAILED - No recipients found",
-                    "step_2_spending": "SKIPPED",
-                    "final_result": "FAILED",
-                    "message": f"Autocomplete found no recipients for '{contractor_name}'"
-                }
-            
-            # Step 2: Test spending data
-            logger.info(f"Step 2: Testing spending data for {len(recipients)} recipients...")
-            first_recipient = recipients[0]
-            spending_data = self._get_contractor_spending_data(first_recipient)
-            
-            return {
-                "test_query": contractor_name,
-                "step_1_autocomplete": f"SUCCESS - Found {len(recipients)} recipients",
-                "step_2_spending": f"SUCCESS - Found {spending_data['total_awards'] if spending_data else 0} awards" if spending_data else "FAILED - No spending data",
-                "final_result": "SUCCESS" if spending_data else "FAILED",
-                "recipients_found": recipients,
-                "spending_data": spending_data,
-                "message": "Test completed - check backend logs for detailed API information"
-            }
-            
-        except Exception as e:
-            logger.error(f"❌ Test failed for {contractor_name}: {str(e)}")
-            return {
-                "test_query": contractor_name,
-                "step_1_autocomplete": "ERROR",
-                "step_2_spending": "ERROR",
-                "final_result": "ERROR",
-                "error": str(e),
-                "message": "Test failed - check backend logs for error details"
-            }
