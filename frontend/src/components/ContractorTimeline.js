@@ -8,7 +8,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
   const [timelineData, setTimelineData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [zoomLevel, setZoomLevel] = useState('auto'); // 'auto', 'months', 'quarters', 'years'
+  const [zoomLevel, setZoomLevel] = useState('auto'); // 'auto', 'months', 'quarters', 'years', 'decades'
 
   // Safely extract data from our API response structure
   const contractorData = profile?.contractor || contractor || {};
@@ -436,7 +436,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
         </div>
       </div>
     );
-  }
+  };
 
   if (error) {
     return (
