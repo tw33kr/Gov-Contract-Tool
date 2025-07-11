@@ -77,22 +77,23 @@ const ContractorTimeline = ({ contractor, profile }) => {
     }
   };
 
-  // Check if contract is currently active
+  // Check if contract is currently active (end date is in the future)
   const isContractActive = (contract) => {
     const now = new Date();
-    const endDate = new Date(contract.end_date);
+    const endDate = parseISO(contract.end_date);
     return isAfter(endDate, now);
   };
 
-  // Check if contract is ending soon (within 1 year)
+  // FIXED: Check if contract is ending soon (within 1 year from today, regardless of whether it's currently active)
   const isContractEndingSoon = (contract) => {
     const now = new Date();
-    const endDate = new Date(contract.end_date);
+    const endDate = parseISO(contract.end_date);
     const oneYearFromNow = addDays(now, 365);
-    return isAfter(endDate, now) && isBefore(endDate, oneYearFromNow);
+    // Contract ends within the next year (could be active or recently completed)
+    return isBefore(endDate, oneYearFromNow) && isAfter(endDate, subMonths(now, 3)); // Include contracts that ended up to 3 months ago
   };
 
-  // Filter contracts based on user selection
+  // FIXED: Filter contracts based on user selection with corrected logic
   const filteredContracts = useMemo(() => {
     if (!timelineData?.timeline_contracts) return [];
     
@@ -102,27 +103,71 @@ const ContractorTimeline = ({ contractor, profile }) => {
       case 'active':
         return contracts.filter(contract => isContractActive(contract));
       case 'ending-soon':
-        return contracts.filter(contract => isContractEndingSoon(contract));
+        // FIXED: Include all contracts that end within 1 year, regardless of current status
+        return contracts.filter(contract => {
+          const now = new Date();
+          const endDate = parseISO(contract.end_date);
+          const oneYearFromNow = addDays(now, 365);
+          // Contracts ending within next 12 months OR ended within last 3 months
+          return (isAfter(endDate, now) && isBefore(endDate, oneYearFromNow)) ||
+                 (isBefore(endDate, now) && isAfter(endDate, subMonths(now, 3)));
+        });
       case 'all':
       default:
         return contracts;
     }
   }, [timelineData, contractFilter]);
 
-  // Calculate dynamic time range based ONLY on filtered contracts (no unnecessary padding)
+  // FIXED: Calculate timeline range based on ALL contracts, not just filtered ones
+  // This prevents scaling issues when switching between filters
   const timeRange = useMemo(() => {
-    if (!filteredContracts || filteredContracts.length === 0) {
+    // Use ALL contracts for calculating the overall timeline range
+    const allContracts = timelineData?.timeline_contracts || [];
+    
+    if (allContracts.length === 0) {
       const now = new Date();
       return {
         start: subMonths(startOfMonth(now), 6),
         end: addMonths(endOfMonth(now), 6),
         duration: 'short',
-        totalYears: 1
+        totalYears: 1,
+        contractStart: now,
+        contractEnd: now,
+        contractYears: 0,
+        actualRange: { start: now, end: now }
       };
     }
 
-    const startDates = filteredContracts.map(c => new Date(c.start_date));
-    const endDates = filteredContracts.map(c => new Date(c.end_date));
+    // Calculate range from ALL contracts to maintain consistent scaling
+    const startDates = allContracts.map(c => {
+      try {
+        return parseISO(c.start_date);
+      } catch {
+        return new Date();
+      }
+    }).filter(date => !isNaN(date.getTime()));
+    
+    const endDates = allContracts.map(c => {
+      try {
+        return parseISO(c.end_date);
+      } catch {
+        return new Date();
+      }
+    }).filter(date => !isNaN(date.getTime()));
+    
+    if (startDates.length === 0 || endDates.length === 0) {
+      const now = new Date();
+      return {
+        start: subMonths(startOfMonth(now), 6),
+        end: addMonths(endOfMonth(now), 6),
+        duration: 'short',
+        totalYears: 1,
+        contractStart: now,
+        contractEnd: now,
+        contractYears: 0,
+        actualRange: { start: now, end: now }
+      };
+    }
     
     const minStart = new Date(Math.min(...startDates));
     const maxEnd = new Date(Math.max(...endDates));
@@ -130,112 +175,136 @@ const ContractorTimeline = ({ contractor, profile }) => {
     // Calculate the actual contract span in years
     const contractYears = differenceInYears(maxEnd, minStart);
     
-    // CRITICAL FIX: Use minimal padding that doesn't extend beyond contract reality
+    // Adaptive padding based on contract span and filter type
     let startPadding, endPadding, duration;
     
     if (contractYears <= 2) {
-      // Very short duration: minimal padding
-      startPadding = 1; // 1 month before
-      endPadding = 1;   // 1 month after
-      duration = 'very-short';
+      startPadding = 1; endPadding = 1; duration = 'very-short';
     } else if (contractYears <= 5) {
-      // Short duration: minimal padding
-      startPadding = 2; // 2 months before
-      endPadding = 2;   // 2 months after
-      duration = 'short';
+      startPadding = 2; endPadding = 2; duration = 'short';
     } else if (contractYears <= 10) {
-      // Medium duration: moderate padding
-      startPadding = 3; // 3 months before
-      endPadding = 3;   // 3 months after
-      duration = 'medium';
+      startPadding = 3; endPadding = 3; duration = 'medium';
     } else if (contractYears <= 20) {
-      // Long duration: moderate padding
-      startPadding = 6;  // 6 months before
-      endPadding = 6;    // 6 months after
-      duration = 'long';
+      startPadding = 6; endPadding = 6; duration = 'long';
     } else {
-      // Very long duration: minimal relative padding
-      startPadding = 6;  // 6 months before
-      endPadding = 6;    // 6 months after
-      duration = 'very-long';
+      startPadding = 6; endPadding = 6; duration = 'very-long';
     }
     
-    // CRITICAL: Timeline should ONLY span the relevant contract period
-    const paddedStart = subMonths(startOfMonth(minStart), startPadding);
-    const paddedEnd = addMonths(endOfMonth(maxEnd), endPadding);
+    // For filtered views, adjust range to focus on relevant period
+    let adjustedStart = minStart;
+    let adjustedEnd = maxEnd;
+    
+    if (contractFilter === 'active' && filteredContracts.length > 0) {
+      // For active contracts, focus on current active period
+      const activeStartDates = filteredContracts.map(c => parseISO(c.start_date));
+      const activeEndDates = filteredContracts.map(c => parseISO(c.end_date));
+      adjustedStart = new Date(Math.min(...activeStartDates));
+      adjustedEnd = new Date(Math.max(...activeEndDates));
+      startPadding = Math.min(startPadding, 3); // Reduce padding for active view
+      endPadding = Math.min(endPadding, 6);
+    } else if (contractFilter === 'ending-soon' && filteredContracts.length > 0) {
+      // For ending soon, focus on the relevant time window
+      const now = new Date();
+      adjustedStart = subMonths(now, 6); // 6 months ago
+      adjustedEnd = addMonths(now, 12); // 12 months from now
+      startPadding = 1;
+      endPadding = 1;
+    }
+    
+    const paddedStart = subMonths(startOfMonth(adjustedStart), startPadding);
+    const paddedEnd = addMonths(endOfMonth(adjustedEnd), endPadding);
     
     return {
       start: paddedStart,
       end: paddedEnd,
       duration,
       totalYears: differenceInYears(paddedEnd, paddedStart),
-      contractStart: minStart,
-      contractEnd: maxEnd,
-      contractYears, // Actual contract span without padding
-      actualRange: { start: minStart, end: maxEnd } // Track the true contract range
+      contractStart: adjustedStart,
+      contractEnd: adjustedEnd,
+      contractYears: differenceInYears(adjustedEnd, adjustedStart),
+      actualRange: { start: adjustedStart, end: adjustedEnd }
     };
-  }, [filteredContracts, contractFilter]);
+  }, [timelineData, contractFilter, filteredContracts]);
 
-  // Calculate screen-responsive timeline parameters
+  // ENHANCED: Better responsive design breakpoints and calculations
   const responsiveTimelineConfig = useMemo(() => {
-    // Get actual container width (fallback to screen calculation if not yet measured)
     const containerElement = ganttContainerRef.current;
-    const actualContainerWidth = containerElement?.offsetWidth || (screenDimensions.width * 0.75); // Estimate 75% of screen
     
-    // Contract label area takes ~264px, timeline area gets the rest
-    const contractLabelWidth = 264;
-    const availableTimelineWidth = Math.max(300, actualContainerWidth - contractLabelWidth - 40); // 40px for padding
+    // Better responsive breakpoints
+    let deviceType, baseSpacing, textWidth, labelWidth;
     
-    // Calculate optimal marker spacing based on screen size and zoom level
-    let minMarkerSpacing, minTextWidth;
-    
-    if (screenDimensions.width < 768) {
-      // Mobile: tighter spacing
-      minMarkerSpacing = 40;
-      minTextWidth = 35;
-    } else if (screenDimensions.width < 1200) {
-      // Tablet: moderate spacing
-      minMarkerSpacing = 60;
-      minTextWidth = 50;
+    if (screenDimensions.width < 640) {
+      // Mobile phones
+      deviceType = 'mobile';
+      baseSpacing = 50;
+      textWidth = 40;
+      labelWidth = 200;
+    } else if (screenDimensions.width < 768) {
+      // Large mobile/small tablet
+      deviceType = 'mobile-large';
+      baseSpacing = 60;
+      textWidth = 45;
+      labelWidth = 220;
+    } else if (screenDimensions.width < 1024) {
+      // Tablet
+      deviceType = 'tablet';
+      baseSpacing = 70;
+      textWidth = 50;
+      labelWidth = 240;
+    } else if (screenDimensions.width < 1440) {
+      // Desktop
+      deviceType = 'desktop';
+      baseSpacing = 80;
+      textWidth = 60;
+      labelWidth = 264;
     } else {
-      // Desktop: comfortable spacing
-      minMarkerSpacing = 80;
-      minTextWidth = 60;
+      // Large desktop
+      deviceType = 'desktop-large';
+      baseSpacing = 100;
+      textWidth = 70;
+      labelWidth = 280;
     }
     
-    // Calculate maximum markers that can physically fit
-    const maxPhysicalMarkers = Math.floor(availableTimelineWidth / minMarkerSpacing);
+    // Calculate available width more accurately
+    const actualContainerWidth = containerElement?.offsetWidth || 
+                                 Math.max(320, screenDimensions.width * 0.9); // Better fallback
     
-    // Ensure reasonable bounds (3-15 markers)
-    const optimalMarkerCount = Math.max(3, Math.min(15, maxPhysicalMarkers));
+    const availableTimelineWidth = Math.max(200, actualContainerWidth - labelWidth - 40);
+    
+    // Calculate optimal marker count based on available space
+    const maxPhysicalMarkers = Math.floor(availableTimelineWidth / baseSpacing);
+    const optimalMarkerCount = Math.max(3, Math.min(deviceType === 'mobile' ? 8 : 15, maxPhysicalMarkers));
     
     return {
       availableWidth: availableTimelineWidth,
       maxMarkers: optimalMarkerCount,
-      minSpacing: minMarkerSpacing,
-      textWidth: minTextWidth,
-      containerWidth: actualContainerWidth
+      minSpacing: baseSpacing,
+      textWidth,
+      labelWidth,
+      containerWidth: actualContainerWidth,
+      deviceType
     };
   }, [screenDimensions, ganttContainerRef.current?.offsetWidth]);
 
-  // Auto-determine optimal zoom level based on ACTUAL contract time range AND screen space
+  // Enhanced zoom level calculation with better responsive logic
   const optimalZoomLevel = useMemo(() => {
     if (zoomLevel !== 'auto') return zoomLevel;
     
     if (!timeRange.contractYears) return 'months';
     
-    // Factor in both time span AND available screen space
-    const { maxMarkers } = responsiveTimelineConfig;
+    const { maxMarkers, deviceType } = responsiveTimelineConfig;
     
-    // For very constrained screens, prefer less granular views
-    if (maxMarkers <= 4) {
-      return timeRange.contractYears > 10 ? 'decades' : 'years';
+    // For mobile devices, prefer less granular views
+    if (deviceType === 'mobile' || maxMarkers <= 4) {
+      if (timeRange.contractYears > 5) return 'years';
+      if (timeRange.contractYears > 2) return 'quarters';
+      return 'months';
     }
     
-    // For normal screens, base on contract span
-    if (timeRange.contractYears <= 2) {
+    // For larger screens, use the full range
+    if (timeRange.contractYears <= 1.5) {
       return 'months';
-    } else if (timeRange.contractYears <= 8) {
+    } else if (timeRange.contractYears <= 6) {
       return 'quarters';
     } else if (timeRange.contractYears <= 25) {
       return 'years';
@@ -251,7 +320,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
     const allContracts = timelineData.timeline_contracts;
     const timelinePoints = [];
     
-    // Generate monthly data points ONLY within the relevant contract period
+    // Generate monthly data points within the timeline range
     let current = timeRange.start;
     while (current <= timeRange.end) {
       let activeRevenue = 0;
@@ -261,23 +330,28 @@ const ContractorTimeline = ({ contractor, profile }) => {
       
       // Calculate revenue and contract count at this point in time
       allContracts.forEach(contract => {
-        const contractStart = new Date(contract.start_date);
-        const contractEnd = new Date(contract.end_date);
-        
-        // Check if contract was active at this time
-        if (contractStart <= current && contractEnd >= current) {
-          const monthlyRevenue = (contract.amount || 0) / Math.max(1, differenceInDays(contractEnd, contractStart) / 30.44); // Approximate monthly revenue
+        try {
+          const contractStart = parseISO(contract.start_date);
+          const contractEnd = parseISO(contract.end_date);
           
-          // Determine if this contract is currently active (at the end of our timeline)
-          const isCurrentlyActive = isAfter(contractEnd, new Date());
-          
-          if (isCurrentlyActive) {
-            activeRevenue += monthlyRevenue;
-            totalActiveContracts += 1;
-          } else {
-            completedRevenue += monthlyRevenue;
-            totalCompletedContracts += 1;
+          // Check if contract was active at this time
+          if (contractStart <= current && contractEnd >= current) {
+            const contractDuration = Math.max(1, differenceInDays(contractEnd, contractStart));
+            const monthlyRevenue = (contract.amount || 0) / (contractDuration / 30.44);
+            
+            // Determine if this contract is currently active
+            const isCurrentlyActive = isAfter(contractEnd, new Date());
+            
+            if (isCurrentlyActive) {
+              activeRevenue += monthlyRevenue;
+              totalActiveContracts += 1;
+            } else {
+              completedRevenue += monthlyRevenue;
+              totalCompletedContracts += 1;
+            }
           }
+        } catch (error) {
+          console.warn('Error processing contract dates:', contract, error);
         }
       });
       
@@ -298,49 +372,47 @@ const ContractorTimeline = ({ contractor, profile }) => {
     return timelinePoints;
   }, [timelineData, timeRange]);
 
-  // SCREEN-RESPONSIVE: Generate timeline scale that fits actual browser dimensions
+  // ENHANCED: Generate responsive timeline scale
   const ganttTimeScale = useMemo(() => {
     if (!timeRange.start || !timeRange.end) return [];
     
     const scale = [];
-    
-    // Use the ACTUAL contract range for timeline generation
     const timelineStart = timeRange.actualRange?.start || timeRange.start;
     const timelineEnd = timeRange.actualRange?.end || timeRange.end;
     
     let current = new Date(timelineStart);
     const totalDuration = differenceInDays(timelineEnd, timelineStart);
     
-    // Get screen-responsive configuration
-    const { maxMarkers, minSpacing, availableWidth } = responsiveTimelineConfig;
+    if (totalDuration <= 0) return [];
     
-    // Determine step size based on ACTUAL contract duration, zoom level, AND screen constraints
+    const { maxMarkers, deviceType } = responsiveTimelineConfig;
+    
+    // Determine step size and formatting based on zoom level and device
     let stepFunction, formatFunction, stepSize;
     
     switch (optimalZoomLevel) {
       case 'months':
         stepFunction = addMonths;
-        // Dynamic step sizing based on available screen space
         stepSize = Math.max(1, Math.ceil(timeRange.contractYears * 12 / maxMarkers));
-        formatFunction = (date) => format(date, 'MMM yy');
+        formatFunction = (date) => deviceType === 'mobile' ? 
+          format(date, 'MMM') : format(date, 'MMM yy');
         current = startOfMonth(current);
         break;
         
       case 'quarters':
         stepFunction = addQuarters;
-        // Dynamic step sizing for quarters based on screen space
         stepSize = Math.max(1, Math.ceil(timeRange.contractYears * 4 / maxMarkers));
         formatFunction = (date) => {
           const quarter = Math.floor(date.getMonth() / 3) + 1;
           const seasonMap = { 1: 'Q1', 2: 'Q2', 3: 'Q3', 4: 'Q4' };
-          return `${seasonMap[quarter]} ${format(date, 'yy')}`;
+          return deviceType === 'mobile' ? 
+            `${seasonMap[quarter]}` : `${seasonMap[quarter]} ${format(date, 'yy')}`;
         };
         current = startOfQuarter(current);
         break;
         
       case 'years':
         stepFunction = addYears;
-        // Smart year stepping based on screen space
         stepSize = Math.max(1, Math.ceil(timeRange.contractYears / maxMarkers));
         formatFunction = (date) => format(date, 'yyyy');
         current = startOfYear(current);
@@ -348,7 +420,6 @@ const ContractorTimeline = ({ contractor, profile }) => {
         
       case 'decades':
         stepFunction = addYears;
-        // For very long spans, use larger year steps that fit the screen
         stepSize = Math.max(2, Math.ceil(timeRange.contractYears / maxMarkers));
         formatFunction = (date) => format(date, 'yyyy');
         current = startOfYear(current);
@@ -363,12 +434,12 @@ const ContractorTimeline = ({ contractor, profile }) => {
     
     let markerCount = 0;
     
-    // Generate markers that fit within screen constraints
+    // Generate timeline markers
     while (current <= timelineEnd && markerCount < maxMarkers) {
-      // Calculate position relative to the TOTAL timeline range (including padding)
       const daysFromTimelineStart = differenceInDays(current, timeRange.start);
       const totalTimelineDuration = differenceInDays(timeRange.end, timeRange.start);
-      const positionPercent = totalTimelineDuration > 0 ? (daysFromTimelineStart / totalTimelineDuration) * 100 : 0;
+      const positionPercent = totalTimelineDuration > 0 ? 
+        (daysFromTimelineStart / totalTimelineDuration) * 100 : 0;
       
       scale.push({
         date: new Date(current),
@@ -380,23 +451,6 @@ const ContractorTimeline = ({ contractor, profile }) => {
       markerCount++;
     }
     
-    // CRITICAL: Ensure the final marker aligns with the last contract end date if there's space
-    if (scale.length > 0 && scale.length < maxMarkers) {
-      const lastMarker = scale[scale.length - 1];
-      const endDaysFromStart = differenceInDays(timelineEnd, timeRange.start);
-      const totalTimelineDuration = differenceInDays(timeRange.end, timeRange.start);
-      const endPosition = totalTimelineDuration > 0 ? (endDaysFromStart / totalTimelineDuration) * 100 : 100;
-      
-      // Add end marker if there's significant space and it won't overcrowd
-      if (endPosition - lastMarker.position > 10) {
-        scale.push({
-          date: new Date(timelineEnd),
-          label: formatFunction(timelineEnd),
-          position: Math.max(0, Math.min(100, endPosition))
-        });
-      }
-    }
-    
     return scale;
   }, [timeRange, optimalZoomLevel, responsiveTimelineConfig]);
 
@@ -406,7 +460,13 @@ const ContractorTimeline = ({ contractor, profile }) => {
     
     const contracts = timelineData.timeline_contracts;
     const activeContracts = contracts.filter(isContractActive);
-    const endingSoonContracts = contracts.filter(isContractEndingSoon);
+    const endingSoonContracts = contracts.filter(contract => {
+      const now = new Date();
+      const endDate = parseISO(contract.end_date);
+      const oneYearFromNow = addDays(now, 365);
+      return (isAfter(endDate, now) && isBefore(endDate, oneYearFromNow)) ||
+             (isBefore(endDate, now) && isAfter(endDate, subMonths(now, 3)));
+    });
     
     const activeValue = activeContracts.reduce((sum, contract) => sum + (contract.amount || 0), 0);
     const totalValue = contracts.reduce((sum, contract) => sum + (contract.amount || 0), 0);
@@ -437,7 +497,6 @@ const ContractorTimeline = ({ contractor, profile }) => {
     const peakPeriod = revenueTimelineData.find(point => point.totalRevenue === maxRevenue);
     const valleyPeriod = revenueTimelineData.find(point => point.totalRevenue === minRevenue);
     
-    // Find peak contract count periods
     const maxContracts = Math.max(...revenueTimelineData.map(point => point.totalContracts));
     const minContracts = Math.min(...revenueTimelineData.map(point => point.totalContracts));
     
@@ -462,7 +521,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
     };
   }, [timelineData, revenueTimelineData]);
 
-  // Calculate Gantt position for contracts with precise alignment to timeline scale
+  // Calculate Gantt position for contracts with precise alignment
   const calculateGanttPosition = (startDate, endDate) => {
     if (!timeRange.start || !timeRange.end) {
       return { left: '0%', width: '0%' };
@@ -471,30 +530,37 @@ const ContractorTimeline = ({ contractor, profile }) => {
     const totalDuration = differenceInDays(timeRange.end, timeRange.start);
     if (totalDuration <= 0) return { left: '0%', width: '0%' };
     
-    const contractStartDate = parseISO(startDate);
-    const contractEndDate = parseISO(endDate);
-    
-    // Calculate position relative to the timeline range (same calculation as scale markers)
-    const startOffset = differenceInDays(contractStartDate, timeRange.start);
-    const contractDuration = differenceInDays(contractEndDate, contractStartDate);
-    
-    // Ensure positions align perfectly with timeline markers
-    const leftPercent = Math.max(0, Math.min(100, (startOffset / totalDuration) * 100));
-    const widthPercent = Math.max(0.5, Math.min(100 - leftPercent, (contractDuration / totalDuration) * 100));
-    
-    return {
-      left: `${leftPercent}%`,
-      width: `${widthPercent}%`
-    };
+    try {
+      const contractStartDate = parseISO(startDate);
+      const contractEndDate = parseISO(endDate);
+      
+      const startOffset = differenceInDays(contractStartDate, timeRange.start);
+      const contractDuration = differenceInDays(contractEndDate, contractStartDate);
+      
+      const leftPercent = Math.max(0, Math.min(100, (startOffset / totalDuration) * 100));
+      const widthPercent = Math.max(0.5, Math.min(100 - leftPercent, (contractDuration / totalDuration) * 100));
+      
+      return {
+        left: `${leftPercent}%`,
+        width: `${widthPercent}%`
+      };
+    } catch (error) {
+      console.warn('Error calculating Gantt position for contract:', { startDate, endDate, error });
+      return { left: '0%', width: '0%' };
+    }
   };
 
   const getStatusColor = (contract) => {
-    const endDate = new Date(contract.end_date);
-    const now = new Date();
-    
-    if (isAfter(now, endDate)) return '#94a3b8'; // gray-400 - completed
-    if (differenceInDays(endDate, now) < 90) return '#f97316'; // orange-500 - ending soon
-    return '#10b981'; // emerald-500 - active
+    try {
+      const endDate = parseISO(contract.end_date);
+      const now = new Date();
+      
+      if (isAfter(now, endDate)) return '#94a3b8'; // gray-400 - completed
+      if (differenceInDays(endDate, now) < 90) return '#f97316'; // orange-500 - ending soon
+      return '#10b981'; // emerald-500 - active
+    } catch {
+      return '#94a3b8'; // gray fallback
+    }
   };
 
   // Calculate SVG path for the revenue area chart
@@ -582,9 +648,9 @@ const ContractorTimeline = ({ contractor, profile }) => {
   return (
     <div className="space-y-6">
       {/* Header and Controls */}
-      <div className="bg-white p-6 rounded-lg shadow">
+      <div className="bg-white p-4 sm:p-6 rounded-lg shadow">
         <div className="flex flex-col lg:flex-row lg:justify-between lg:items-center mb-4 space-y-4 lg:space-y-0">
-          <h2 className="text-2xl font-bold text-gray-900">
+          <h2 className="text-xl sm:text-2xl font-bold text-gray-900">
             📊 {contractorName} - Revenue Timeline
           </h2>
           
@@ -593,7 +659,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
             <select
               value={contractFilter}
               onChange={(e) => setContractFilter(e.target.value)}
-              className="px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+              className="px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-sm"
             >
               <option value="active">Active Contracts Only</option>
               <option value="ending-soon">Contracts Ending Within 1 Year</option>
@@ -603,7 +669,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
             <select
               value={zoomLevel}
               onChange={(e) => setZoomLevel(e.target.value)}
-              className="px-3 py-2 border border-gray-300 rounded-md focus:ring-purple-500 focus:border-purple-500"
+              className="px-3 py-2 border border-gray-300 rounded-md focus:ring-purple-500 focus:border-purple-500 text-sm"
             >
               <option value="auto">Auto Scale ({optimalZoomLevel})</option>
               <option value="months">Monthly View</option>
@@ -615,7 +681,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
             <div className="flex rounded-md shadow-sm">
               <button
                 onClick={() => setViewMode('revenue-timeline')}
-                className={`px-4 py-2 text-sm font-medium rounded-l-md border ${
+                className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium rounded-l-md border ${
                   viewMode === 'revenue-timeline'
                     ? 'bg-blue-600 text-white border-blue-600'
                     : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
@@ -625,7 +691,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
               </button>
               <button
                 onClick={() => setViewMode('gantt')}
-                className={`px-4 py-2 text-sm font-medium border-t border-b ${
+                className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium border-t border-b ${
                   viewMode === 'gantt'
                     ? 'bg-blue-600 text-white border-blue-600'
                     : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
@@ -635,7 +701,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
               </button>
               <button
                 onClick={() => setViewMode('list')}
-                className={`px-4 py-2 text-sm font-medium rounded-r-md border ${
+                className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium rounded-r-md border ${
                   viewMode === 'list'
                     ? 'bg-blue-600 text-white border-blue-600'
                     : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
@@ -648,50 +714,50 @@ const ContractorTimeline = ({ contractor, profile }) => {
         </div>
 
         {/* Enhanced Business Intelligence Stats */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4">
-          <div className="text-center p-4 bg-green-50 rounded-lg">
-            <div className="text-2xl font-bold text-green-600">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-4">
+          <div className="text-center p-2 sm:p-4 bg-green-50 rounded-lg">
+            <div className="text-lg sm:text-2xl font-bold text-green-600">
               {summaryStats.activeContracts || 0}
             </div>
-            <div className="text-sm text-green-800">Active Contracts</div>
+            <div className="text-xs sm:text-sm text-green-800">Active Contracts</div>
           </div>
-          <div className="text-center p-4 bg-blue-50 rounded-lg">
-            <div className="text-xl font-bold text-blue-600">
+          <div className="text-center p-2 sm:p-4 bg-blue-50 rounded-lg">
+            <div className="text-sm sm:text-xl font-bold text-blue-600">
               {formatCurrency(summaryStats.activeValue || 0)}
             </div>
-            <div className="text-sm text-blue-800">Active Revenue</div>
+            <div className="text-xs sm:text-sm text-blue-800">Active Revenue</div>
           </div>
-          <div className="text-center p-4 bg-purple-50 rounded-lg">
-            <div className="text-xl font-bold text-purple-600">
+          <div className="text-center p-2 sm:p-4 bg-purple-50 rounded-lg">
+            <div className="text-sm sm:text-xl font-bold text-purple-600">
               {formatCurrency(summaryStats.totalValue || 0)}
             </div>
-            <div className="text-sm text-purple-800">Total Lifetime</div>
+            <div className="text-xs sm:text-sm text-purple-800">Total Lifetime</div>
           </div>
-          <div className="text-center p-4 bg-orange-50 rounded-lg">
+          <div className="text-center p-2 sm:p-4 bg-orange-50 rounded-lg">
             <div className="text-lg font-bold text-orange-600">
               {summaryStats.endingSoonContracts || 0}
             </div>
-            <div className="text-sm text-orange-800">Ending Within 1 Year</div>
+            <div className="text-xs sm:text-sm text-orange-800">Ending Within 1 Year</div>
           </div>
-          <div className="text-center p-4 bg-red-50 rounded-lg">
-            <div className="text-lg font-bold text-red-600">
+          <div className="text-center p-2 sm:p-4 bg-red-50 rounded-lg">
+            <div className="text-sm sm:text-lg font-bold text-red-600">
               {summaryStats.valleyContractPeriod}
             </div>
-            <div className="text-sm text-red-800">Lowest Activity ({summaryStats.minContracts})</div>
+            <div className="text-xs sm:text-sm text-red-800">Lowest Activity ({summaryStats.minContracts})</div>
           </div>
-          <div className="text-center p-4 bg-gray-50 rounded-lg">
-            <div className="text-2xl font-bold text-gray-600">
+          <div className="text-center p-2 sm:p-4 bg-gray-50 rounded-lg">
+            <div className="text-xl sm:text-2xl font-bold text-gray-600">
               {timelineData.metadata?.is_complete_data ? '✅' : '⚠️'}
             </div>
-            <div className="text-sm text-gray-800">
+            <div className="text-xs sm:text-sm text-gray-800">
               {timelineData.metadata?.is_complete_data ? 'Complete Data' : 'Limited Data'}
             </div>
           </div>
         </div>
 
-        {/* SCREEN-RESPONSIVE Timeline Info */}
+        {/* Timeline Info */}
         <div className="mt-4 p-3 bg-blue-50 rounded-lg">
-          <div className="text-sm text-blue-800">
+          <div className="text-xs sm:text-sm text-blue-800">
             <strong>Current View:</strong> {
               contractFilter === 'active' ? 
                 `Showing ${summaryStats.activeContracts} active contracts` :
@@ -702,13 +768,8 @@ const ContractorTimeline = ({ contractor, profile }) => {
             <span className="ml-2">
               (Contract Period: {format(timeRange.actualRange?.start || timeRange.start, 'MMM yyyy')} - {format(timeRange.actualRange?.end || timeRange.end, 'MMM yyyy')})
             </span>
-            <span className="ml-2 font-medium">
-              | Scale: {
-                optimalZoomLevel === 'decades' ? `Multi-Year (${ganttTimeScale.length} markers, ${Math.round(responsiveTimelineConfig.availableWidth)}px wide)` :
-                optimalZoomLevel === 'years' ? `Yearly (${ganttTimeScale.length} markers)` :
-                optimalZoomLevel === 'quarters' ? `Quarterly (${ganttTimeScale.length} markers)` : 
-                `Monthly (${ganttTimeScale.length} markers)`
-              } - Screen-responsive timeline optimized for {screenDimensions.width}px display
+            <span className="hidden sm:inline ml-2 font-medium">
+              | Scale: {optimalZoomLevel} ({ganttTimeScale.length} markers) - Optimized for {responsiveTimelineConfig.deviceType}
             </span>
           </div>
         </div>
@@ -718,14 +779,14 @@ const ContractorTimeline = ({ contractor, profile }) => {
       <div className="bg-white rounded-lg shadow" ref={ganttContainerRef}>
         {viewMode === 'revenue-timeline' ? (
           // Enhanced Revenue Timeline Chart
-          <div className="p-6">
-            <h3 className="text-lg font-medium text-gray-900 mb-6">
+          <div className="p-4 sm:p-6">
+            <h3 className="text-base sm:text-lg font-medium text-gray-900 mb-6">
               📈 Revenue Performance Timeline
               {contractFilter === 'active' && <span className="text-sm text-green-600 ml-2">(Active Contracts in Green)</span>}
               {contractFilter === 'all' && <span className="text-sm text-gray-600 ml-2">(Active: Green, Completed: Gray)</span>}
             </h3>
             
-            <div className="relative h-80 mb-6 bg-gray-50 rounded-lg p-4 border">
+            <div className="relative h-60 sm:h-80 mb-6 bg-gray-50 rounded-lg p-4 border">
               {revenueTimelineData.length > 0 ? (
                 <svg width="100%" height="100%" viewBox="0 0 800 300" className="overflow-visible">
                   {/* Background grid */}
@@ -799,7 +860,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
             </div>
 
             {/* Legend */}
-            <div className="flex justify-center space-x-6 text-sm mb-6">
+            <div className="flex flex-wrap justify-center gap-4 sm:gap-6 text-sm mb-6">
               <div className="flex items-center space-x-2">
                 <div className="w-4 h-4 bg-green-500 rounded"></div>
                 <span>Active Contract Revenue</span>
@@ -836,36 +897,38 @@ const ContractorTimeline = ({ contractor, profile }) => {
             </div>
           </div>
         ) : viewMode === 'gantt' ? (
-          // SCREEN-RESPONSIVE Gantt Chart View
-          <div className="p-6" ref={timelineAreaRef}>
-            <h3 className="text-lg font-medium text-gray-900 mb-6">
-              📋 Contract Portfolio Gantt Chart - Screen-Responsive Timeline
+          // ENHANCED: Responsive Gantt Chart View
+          <div className="p-4 sm:p-6" ref={timelineAreaRef}>
+            <h3 className="text-base sm:text-lg font-medium text-gray-900 mb-6">
+              📋 Contract Portfolio Gantt Chart
               {contractFilter === 'active' && <span className="text-sm text-green-600 ml-2">(Active Contracts Only)</span>}
               {contractFilter === 'ending-soon' && <span className="text-sm text-orange-600 ml-2">(Contracts Ending Within 1 Year)</span>}
-              <span className="text-sm text-purple-600 ml-2">
-                ({optimalZoomLevel === 'decades' ? 'Multi-Year Scale' : 
-                  optimalZoomLevel.charAt(0).toUpperCase() + optimalZoomLevel.slice(1)} Scale)
-              </span>
+              {contractFilter === 'all' && <span className="text-sm text-gray-600 ml-2">(All Contract History)</span>}
             </h3>
             
             {sortedContracts.length === 0 ? (
               <div className="text-center text-gray-500 py-8">
                 <div className="text-4xl mb-4">📅</div>
                 <p>No contracts found for the selected filter criteria.</p>
+                <p className="text-sm mt-2 text-gray-400">
+                  {contractFilter === 'ending-soon' ? 
+                    'Try selecting "All Contract History" to see completed contracts.' :
+                    'Try adjusting your filter selection.'
+                  }
+                </p>
               </div>
             ) : (
               <>
-                {/* SCREEN-RESPONSIVE Time Scale Header */}
-                <div className="mb-4 border-b border-gray-200 pb-2 bg-gray-50 rounded-t-lg">
-                  <div className="text-xs text-gray-500 font-medium relative h-12 flex items-end">
-                    <div className="w-64 flex-shrink-0 text-center border-r border-gray-300 py-2">
+                {/* Responsive Time Scale Header */}
+                <div className="mb-4 border-b border-gray-200 pb-2 bg-gray-50 rounded-t-lg overflow-x-auto">
+                  <div className="text-xs text-gray-500 font-medium relative h-12 flex items-end min-w-[600px]">
+                    <div style={{width: `${responsiveTimelineConfig.labelWidth}px`}} className="flex-shrink-0 text-center border-r border-gray-300 py-2">
                       <strong>Contract Details</strong>
                     </div>
                     <div className="flex-1 relative px-2">
                       <div className="text-center mb-1 text-gray-700 font-semibold">
-                        Contract Timeline: {format(timeRange.actualRange?.start || timeRange.start, 'MMM yyyy')} - {format(timeRange.actualRange?.end || timeRange.end, 'MMM yyyy')} 
-                        ({optimalZoomLevel === 'decades' ? 'Multi-Year' : 
-                          optimalZoomLevel.charAt(0).toUpperCase() + optimalZoomLevel.slice(1)} Scale)
+                        Timeline: {format(timeRange.actualRange?.start || timeRange.start, 'MMM yyyy')} - {format(timeRange.actualRange?.end || timeRange.end, 'MMM yyyy')} 
+                        ({optimalZoomLevel.charAt(0).toUpperCase() + optimalZoomLevel.slice(1)} Scale)
                       </div>
                       <div className="relative">
                         {ganttTimeScale.map((scaleItem, index) => (
@@ -888,62 +951,72 @@ const ContractorTimeline = ({ contractor, profile }) => {
                   </div>
                 </div>
 
-                {/* Contract Gantt Bars with precise alignment */}
+                {/* Contract Gantt Bars with responsive design */}
                 <div className="space-y-1 relative overflow-x-auto" style={{ minHeight: Math.max(300, sortedContracts.slice(0, 50).length * 36) }}>
-                  {sortedContracts.slice(0, 50).map((contract, index) => {
-                    const position = calculateGanttPosition(contract.start_date, contract.end_date);
-                    const color = getStatusColor(contract);
-                    const isShortContract = parseFloat(position.width) < 2; // Less than 2% width
-                    
-                    return (
-                      <div key={contract.id || index} className="relative h-8 hover:bg-gray-50 group">
-                        {/* Contract Label */}
-                        <div className="absolute left-0 top-0 w-64 h-8 flex items-center px-3 bg-white border-r border-gray-200 z-20">
-                          <div className="truncate">
-                            <div className="text-xs font-medium text-gray-900 truncate" title={contract.title || contract.id}>
-                              {contract.title || contract.id}
+                  <div className="min-w-[600px]">
+                    {sortedContracts.slice(0, 50).map((contract, index) => {
+                      const position = calculateGanttPosition(contract.start_date, contract.end_date);
+                      const color = getStatusColor(contract);
+                      const isShortContract = parseFloat(position.width) < 2;
+                      
+                      return (
+                        <div key={contract.id || index} className="relative h-8 hover:bg-gray-50 group">
+                          {/* Contract Label */}
+                          <div 
+                            className="absolute left-0 top-0 h-8 flex items-center px-3 bg-white border-r border-gray-200 z-20"
+                            style={{width: `${responsiveTimelineConfig.labelWidth}px`}}
+                          >
+                            <div className="truncate w-full">
+                              <div className="text-xs font-medium text-gray-900 truncate" title={contract.title || contract.id}>
+                                {contract.title || contract.id}
+                              </div>
+                              <div className="text-xs text-gray-500">
+                                {formatCurrency(contract.amount)}
+                              </div>
                             </div>
-                            <div className="text-xs text-gray-500">
-                              {formatCurrency(contract.amount)}
+                          </div>
+                          
+                          {/* Gantt Bar */}
+                          <div 
+                            className="absolute top-0 right-0 h-8 flex items-center px-2"
+                            style={{left: `${responsiveTimelineConfig.labelWidth}px`}}
+                          >
+                            <div className="relative w-full h-full">
+                              <div
+                                className={`absolute rounded-sm shadow-sm border border-white flex items-center px-1 text-white text-xs font-medium overflow-hidden transition-all duration-200 hover:shadow-md ${
+                                  isShortContract ? 'min-w-1' : ''
+                                }`}
+                                style={{
+                                  left: position.left,
+                                  width: position.width,
+                                  height: '24px',
+                                  backgroundColor: color,
+                                  top: '2px',
+                                  minWidth: isShortContract ? '4px' : '2px',
+                                  zIndex: 10
+                                }}
+                                title={`${contract.title}\n${formatDate(contract.start_date)} - ${formatDate(contract.end_date)}\n${formatCurrency(contract.amount)}\nDuration: ${differenceInDays(parseISO(contract.end_date), parseISO(contract.start_date))} days`}
+                              >
+                                {!isShortContract && (
+                                  <span className="truncate text-xs">
+                                    {optimalZoomLevel === 'decades' || optimalZoomLevel === 'years' ? 
+                                      format(parseISO(contract.start_date), 'yyyy') :
+                                      responsiveTimelineConfig.deviceType === 'mobile' ?
+                                        format(parseISO(contract.start_date), 'MMM yy') :
+                                        `${format(parseISO(contract.start_date), 'MMM yy')} - ${format(parseISO(contract.end_date), 'MMM yy')}`
+                                    }
+                                  </span>
+                                )}
+                              </div>
                             </div>
                           </div>
                         </div>
-                        
-                        {/* Gantt Bar with precise positioning */}
-                        <div className="absolute left-64 top-0 right-0 h-8 flex items-center px-2">
-                          <div className="relative w-full h-full">
-                            <div
-                              className={`absolute rounded-sm shadow-sm border border-white flex items-center px-1 text-white text-xs font-medium overflow-hidden transition-all duration-200 hover:shadow-md ${
-                                isShortContract ? 'min-w-1' : ''
-                              }`}
-                              style={{
-                                left: position.left,
-                                width: position.width,
-                                height: '24px',
-                                backgroundColor: color,
-                                top: '2px',
-                                minWidth: isShortContract ? '4px' : '2px',
-                                zIndex: 10
-                              }}
-                              title={`${contract.title}\n${formatDate(contract.start_date)} - ${formatDate(contract.end_date)}\n${formatCurrency(contract.amount)}\nDuration: ${differenceInDays(parseISO(contract.end_date), parseISO(contract.start_date))} days`}
-                            >
-                              {!isShortContract && (
-                                <span className="truncate text-xs">
-                                  {optimalZoomLevel === 'decades' || optimalZoomLevel === 'years' ? 
-                                    format(parseISO(contract.start_date), 'yyyy') :
-                                    `${format(parseISO(contract.start_date), 'MMM yy')} - ${format(parseISO(contract.end_date), 'MMM yy')}`
-                                  }
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
                 </div>
 
-                {/* Enhanced Legend with screen-responsive information */}
+                {/* Enhanced Legend */}
                 <div className="mt-6 space-y-3">
                   <div className="flex flex-wrap gap-4 text-sm">
                     <div className="flex items-center space-x-2">
@@ -963,15 +1036,9 @@ const ContractorTimeline = ({ contractor, profile }) => {
                   </div>
                   
                   <div className="text-sm text-gray-600 bg-gray-50 p-3 rounded-lg">
-                    <strong>Screen-Responsive Timeline:</strong> Timeline automatically adapts to your {screenDimensions.width}px display with {ganttTimeScale.length} optimally-spaced markers covering the contract period ({format(timeRange.actualRange?.start || timeRange.start, 'MMM yyyy')} to {format(timeRange.actualRange?.end || timeRange.end, 'MMM yyyy')}). {
-                      optimalZoomLevel === 'months' ? 
-                        `Monthly markers optimized for your screen resolution` :
-                      optimalZoomLevel === 'quarters' ?
-                        `Quarterly markers with ${Math.round(responsiveTimelineConfig.minSpacing)}px spacing` :
-                      optimalZoomLevel === 'years' ?
-                        `Yearly markers for long-term analysis on ${Math.round(responsiveTimelineConfig.availableWidth)}px timeline` :
-                        `Multi-year markers optimized for ${Math.round(responsiveTimelineConfig.availableWidth)}px display width`
-                    }
+                    <strong>Responsive Timeline:</strong> Optimized for {responsiveTimelineConfig.deviceType} display 
+                    ({screenDimensions.width}px) with {ganttTimeScale.length} timeline markers. 
+                    Filter showing {sortedContracts.length} contracts out of {timelineData.timeline_contracts?.length || 0} total.
                   </div>
                 </div>
                 
@@ -987,8 +1054,8 @@ const ContractorTimeline = ({ contractor, profile }) => {
         ) : (
           // List View 
           <div className="divide-y divide-gray-200">
-            <div className="px-6 py-4 bg-gray-50">
-              <h3 className="text-lg font-medium text-gray-900">
+            <div className="px-4 sm:px-6 py-4 bg-gray-50">
+              <h3 className="text-base sm:text-lg font-medium text-gray-900">
                 Contract Portfolio ({sortedContracts.length})
               </h3>
               <p className="text-sm text-gray-600 mt-1">
@@ -999,18 +1066,18 @@ const ContractorTimeline = ({ contractor, profile }) => {
             </div>
             
             {sortedContracts.map((contract, index) => {
-              const daysRemaining = differenceInDays(new Date(contract.end_date), new Date());
+              const daysRemaining = differenceInDays(parseISO(contract.end_date), new Date());
               const isActive = isContractActive(contract);
               
               return (
-                <div key={contract.id || index} className="p-6">
-                  <div className="flex justify-between items-start">
+                <div key={contract.id || index} className="p-4 sm:p-6">
+                  <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start space-y-2 sm:space-y-0">
                     <div className="flex-1">
                       <div className="flex items-center space-x-2 mb-2">
                         <span className="text-lg">
                           {isActive ? (daysRemaining < 90 ? '⏰' : '✅') : '✔️'}
                         </span>
-                        <h4 className="text-lg font-semibold text-gray-900">
+                        <h4 className="text-base sm:text-lg font-semibold text-gray-900">
                           {contract.title || contract.id}
                         </h4>
                         <span className={`px-2 py-1 rounded text-xs font-medium ${
@@ -1020,7 +1087,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
                         </span>
                       </div>
                       
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 text-sm text-gray-600">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4 text-sm text-gray-600">
                         <div>
                           <span className="font-medium">Agency:</span> {contract.agency}
                         </div>
@@ -1036,8 +1103,8 @@ const ContractorTimeline = ({ contractor, profile }) => {
                       </div>
                     </div>
                     
-                    <div className="text-right ml-4">
-                      <div className="text-lg font-bold text-blue-600">
+                    <div className="text-left sm:text-right sm:ml-4">
+                      <div className="text-base sm:text-lg font-bold text-blue-600">
                         {formatCurrency(contract.amount)}
                       </div>
                       {isActive && daysRemaining > 0 && (
@@ -1055,7 +1122,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
       </div>
 
       {/* Enhanced Business Intelligence Summary */}
-      <div className="bg-gradient-to-r from-blue-50 to-green-50 p-6 rounded-lg">
+      <div className="bg-gradient-to-r from-blue-50 to-green-50 p-4 sm:p-6 rounded-lg">
         <h4 className="font-medium text-gray-900 mb-3">🎯 Business Intelligence Summary</h4>
         <div className="text-sm text-gray-700 space-y-2">
           <p>
@@ -1067,8 +1134,8 @@ const ContractorTimeline = ({ contractor, profile }) => {
             with {summaryStats.maxContracts} simultaneous contracts.
           </p>
           <p>
-            <strong>Screen-Responsive Design:</strong> Gantt chart automatically adapts to your {screenDimensions.width}px × {screenDimensions.height}px display, 
-            optimizing timeline marker spacing and readability for your specific screen dimensions.
+            <strong>Responsive Design:</strong> Interface optimized for {responsiveTimelineConfig.deviceType} devices 
+            ({screenDimensions.width}px display) with dynamic timeline scaling.
           </p>
         </div>
       </div>
