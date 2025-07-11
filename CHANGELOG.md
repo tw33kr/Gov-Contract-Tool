@@ -5,7 +5,140 @@ All notable changes to the Federal Contract Research Tool will be documented in 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - 2025-07-10 21:30 UTC
+## [Unreleased] - 2025-07-11 15:45 UTC
+
+### Enhanced - Revenue Timeline Visualization with Active vs Completed Contract Analysis
+
+**Developer**: Claude (Anthropic) - Session 2025-07-11  
+**Enhancement Type**: MAJOR TIMELINE VISUALIZATION IMPROVEMENT  
+**Breaking Changes**: None (Fully Backward Compatible)
+
+#### 🎯 User Request Implementation
+Enhanced the ContractorTimeline component to focus on business intelligence by improving the revenue timeline visualization with better differentiation between active and completed contracts.
+
+#### 🚀 Key Enhancements Implemented
+
+**1. Enhanced Revenue Timeline Chart**
+- **Active vs Completed Visualization**: Revenue timeline now clearly separates active contracts (green) from completed contracts (gray)
+- **Stacked Area Chart**: Implemented proper SVG-based area chart showing revenue composition over time
+- **Business Intelligence Focus**: Chart emphasizes current business capacity vs historical performance
+- **Dynamic Legend**: Legend adapts based on filter selection (active only vs all contracts)
+
+**2. Improved Active Contract Filtering**  
+- **Smart Contract Status Detection**: Enhanced logic to determine active vs completed contracts based on end dates
+- **Filter Impact Visualization**: Active filter now properly excludes completed contracts from timeline view
+- **Business Context**: Filter changes provide clear indication of what data is being shown
+- **Gantt Chart Integration**: Gantt view now respects active/all filter selection
+
+**3. Enhanced Business Intelligence Metrics**
+- **Peak Activity Analysis**: Added metrics showing when contractor had highest/lowest contract activity
+- **Contract Count Timeline**: Track number of simultaneous contracts over time  
+- **Revenue Performance**: Better calculation of monthly revenue distribution
+- **Historical Patterns**: Identify growth patterns and business cycles
+
+**4. Improved Chart Rendering**
+- **SVG-Based Charts**: Professional SVG implementation with proper scaling and grid lines
+- **Better Path Generation**: Improved area chart path calculation with proper error handling
+- **Responsive Design**: Charts adapt to different screen sizes and zoom levels
+- **Visual Clarity**: Enhanced color coding and opacity for better data visualization
+
+#### 📊 Technical Implementation Details
+
+**Revenue Timeline Data Structure**:
+```javascript
+const revenueTimelineData = [
+  {
+    date: Date,
+    activeRevenue: number,        // Revenue from currently active contracts
+    completedRevenue: number,     // Revenue from completed contracts  
+    totalRevenue: number,         // Combined revenue
+    activeContracts: number,      // Count of active contracts
+    completedContracts: number,   // Count of completed contracts
+    totalContracts: number        // Total contract count
+  }
+];
+```
+
+**Enhanced Statistics Calculation**:
+```javascript
+const summaryStats = {
+  // Existing metrics
+  activeContracts, totalContracts, activeValue, totalValue,
+  
+  // NEW: Peak/valley analysis
+  peakContractPeriod: "MMM yyyy",     // When most contracts were active
+  valleyContractPeriod: "MMM yyyy",   // When fewest contracts were active  
+  maxContracts: number,               // Peak contract count
+  minContracts: number                // Lowest contract count
+};
+```
+
+**SVG Chart Implementation**:
+```javascript
+const generateRevenueAreaPath = (data, height, width, property) => {
+  // Creates proper SVG paths for stacked area charts
+  // Handles active revenue, completed revenue, and total revenue lines
+  // Includes error handling for empty data sets
+};
+```
+
+#### 🎯 Business Intelligence Value
+
+**For Active Contracts View**:
+- Shows current contractor capacity and active revenue stream
+- Identifies upcoming contract expirations and recompete opportunities
+- Focuses on immediate business relevance for partnership decisions
+
+**For All Contracts View**:
+- Reveals historical growth patterns and business cycles
+- Shows peak performance periods for competitive analysis
+- Demonstrates contractor stability and market presence over time
+
+**Enhanced Insights Panel**:
+- **Current Business Status**: Active revenue, contract count, market position assessment
+- **Historical Performance**: Peak activity periods, growth patterns, business cycle analysis
+- **Strategic Intelligence**: Contextual insights based on selected view mode
+
+#### 📋 Files Modified
+
+**Frontend Files**:
+- `frontend/src/components/ContractorTimeline.js` - Complete enhancement of revenue timeline visualization with active vs completed contract analysis
+
+#### ⚡ Performance & User Experience Improvements
+
+**Chart Performance**:
+- Efficient SVG rendering with proper viewBox scaling
+- Optimized data processing for timeline calculations
+- Safe error handling for edge cases (empty data, calculation errors)
+
+**User Experience**:
+- Clear visual distinction between active (green) and completed (gray) contracts
+- Intuitive filter controls with immediate visual feedback
+- Enhanced tooltips and legends for better data understanding
+- Responsive design that fits in normal window view as requested
+
+#### 🧪 Testing Recommendations
+
+**Key Test Cases**:
+1. **Active Filter Test**: Verify that "Active Contracts Only" filter properly excludes completed contracts from all views
+2. **Revenue Timeline Test**: Confirm green areas represent active revenue, gray areas represent completed revenue
+3. **Peak Analysis Test**: Validate that peak/valley contract periods are correctly identified and displayed
+4. **Chart Rendering Test**: Ensure SVG charts render properly across different screen sizes
+5. **Business Intelligence Test**: Verify insights panel provides relevant analysis based on filter selection
+
+#### 🎉 User-Requested Features Delivered
+
+✅ **Active vs Completed Contract Distinction**: Timeline clearly separates current business from historical performance
+✅ **Business Intelligence Focus**: Enhanced metrics for understanding contractor capacity and growth patterns  
+✅ **Window-Friendly Visualization**: Charts designed to fit properly in normal browser windows
+✅ **Revenue Timeline Chart**: Professional area chart showing revenue composition over time
+✅ **Enhanced Analytics**: Peak/valley analysis for understanding business cycles and competitive positioning
+
+This enhancement transforms the ContractorTimeline from a simple contract list into a powerful business intelligence tool that helps users understand contractor capacity, revenue patterns, and optimal timing for business relationships.
+
+---
+
+## [Previous] - 2025-07-10 21:30 UTC
 
 ### 📋 CRITICAL STRUCTURAL CHANGES & HANDOFF DOCUMENTATION
 
