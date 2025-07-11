@@ -9,10 +9,25 @@ const ContractorTimeline = ({ contractor, profile }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [zoomLevel, setZoomLevel] = useState('auto'); // 'auto', 'months', 'quarters', 'years'
+  const ganttContainerRef = useRef(null);
+  const [containerWidth, setContainerWidth] = useState(1200); // Default width
 
   // Safely extract data from our API response structure
   const contractorData = profile?.contractor || contractor || {};
   const contractorName = contractorData.name || contractor?.name || 'Unknown Contractor';
+
+  // Responsive container width detection
+  useEffect(() => {
+    const updateWidth = () => {
+      if (ganttContainerRef.current) {
+        setContainerWidth(ganttContainerRef.current.clientWidth);
+      }
+    };
+
+    updateWidth();
+    window.addEventListener('resize', updateWidth);
+    return () => window.removeEventListener('resize', updateWidth);
+  }, [viewMode]);
 
   // Fetch complete timeline data when component loads
   const fetchTimelineData = useCallback(async () => {
@@ -77,7 +92,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
     return isAfter(endDate, now) && isBefore(endDate, oneYearFromNow);
   };
 
-  // Filter contracts based on user selection (SIMPLIFIED)
+  // Filter contracts based on user selection
   const filteredContracts = useMemo(() => {
     if (!timelineData?.timeline_contracts) return [];
     
@@ -94,14 +109,15 @@ const ContractorTimeline = ({ contractor, profile }) => {
     }
   }, [timelineData, contractFilter]);
 
-  // Calculate timeline range (SIMPLIFIED)
+  // Calculate timeline range with responsive padding
   const timeRange = useMemo(() => {
     if (filteredContracts.length === 0) {
       const now = new Date();
       return {
         start: subMonths(startOfMonth(now), 6),
         end: addMonths(endOfMonth(now), 6),
-        totalYears: 1
+        totalYears: 1,
+        totalDays: 365
       };
     }
 
@@ -113,39 +129,49 @@ const ContractorTimeline = ({ contractor, profile }) => {
       return {
         start: subMonths(startOfMonth(now), 6),
         end: addMonths(endOfMonth(now), 6),
-        totalYears: 1
+        totalYears: 1,
+        totalDays: 365
       };
     }
     
     const minStart = new Date(Math.min(...startDates));
     const maxEnd = new Date(Math.max(...endDates));
     
-    // Simple padding calculation
-    const contractYears = differenceInYears(maxEnd, minStart);
-    const padding = Math.max(3, Math.min(12, contractYears / 2));
+    // Dynamic padding based on timeline span and screen size
+    const contractDays = differenceInDays(maxEnd, minStart);
+    const contractYears = contractDays / 365;
     
-    const paddedStart = subMonths(startOfMonth(minStart), padding);
-    const paddedEnd = addMonths(endOfMonth(maxEnd), padding);
+    // Responsive padding calculation
+    const screenFactor = containerWidth / 1200; // Normalize to standard width
+    const basePadding = contractFilter === 'active' ? 30 : 60; // Less padding for active view
+    const paddingDays = Math.max(basePadding, Math.min(180, contractDays * 0.1 * screenFactor));
+    
+    const paddedStart = addDays(minStart, -paddingDays);
+    const paddedEnd = addDays(maxEnd, paddingDays);
     
     return {
       start: paddedStart,
       end: paddedEnd,
-      totalYears: differenceInYears(paddedEnd, paddedStart)
+      totalYears: differenceInYears(paddedEnd, paddedStart),
+      totalDays: differenceInDays(paddedEnd, paddedStart)
     };
-  }, [filteredContracts]);
+  }, [filteredContracts, containerWidth, contractFilter]);
 
-  // Determine optimal zoom level (SIMPLIFIED)
+  // Determine optimal zoom level based on timeline span and screen size
   const optimalZoomLevel = useMemo(() => {
     if (zoomLevel !== 'auto') return zoomLevel;
     
-    if (timeRange.totalYears <= 2) {
+    const pixelsPerDay = containerWidth / timeRange.totalDays;
+    const daysPerMarker = timeRange.totalDays / 12; // Target ~12 markers
+    
+    if (pixelsPerDay > 2 || daysPerMarker < 30) {
       return 'months';
-    } else if (timeRange.totalYears <= 8) {
+    } else if (pixelsPerDay > 0.5 || daysPerMarker < 90) {
       return 'quarters';
     } else {
       return 'years';
     }
-  }, [timeRange, zoomLevel]);
+  }, [timeRange, zoomLevel, containerWidth]);
 
   // Generate revenue timeline data for the area chart
   const revenueTimelineData = useMemo(() => {
@@ -206,7 +232,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
     return timelinePoints;
   }, [timelineData, timeRange]);
 
-  // Generate timeline scale (SIMPLIFIED)
+  // Generate timeline scale with responsive marker density
   const ganttTimeScale = useMemo(() => {
     if (!timeRange.start || !timeRange.end) return [];
     
@@ -216,35 +242,35 @@ const ContractorTimeline = ({ contractor, profile }) => {
     
     if (totalDuration <= 0) return [];
     
+    // Responsive marker density
+    const targetMarkers = Math.max(6, Math.min(20, Math.floor(containerWidth / 80)));
+    
     // Determine step size and formatting based on zoom level
-    let stepFunction, formatFunction, stepSize, maxMarkers;
+    let stepFunction, formatFunction, stepSize;
     
     switch (optimalZoomLevel) {
       case 'months':
         stepFunction = addMonths;
-        stepSize = 1;
+        stepSize = Math.max(1, Math.ceil(timeRange.totalDays / 30 / targetMarkers));
         formatFunction = (date) => format(date, 'MMM yy');
         current = startOfMonth(current);
-        maxMarkers = 24;
         break;
         
       case 'quarters':
         stepFunction = addQuarters;
-        stepSize = 1;
+        stepSize = Math.max(1, Math.ceil(timeRange.totalYears * 4 / targetMarkers));
         formatFunction = (date) => {
           const quarter = Math.floor(date.getMonth() / 3) + 1;
           return `Q${quarter} ${format(date, 'yy')}`;
         };
         current = startOfQuarter(current);
-        maxMarkers = 16;
         break;
         
       case 'years':
         stepFunction = addYears;
-        stepSize = 1;
+        stepSize = Math.max(1, Math.ceil(timeRange.totalYears / targetMarkers));
         formatFunction = (date) => format(date, 'yyyy');
         current = startOfYear(current);
-        maxMarkers = 12;
         break;
         
       default:
@@ -252,13 +278,10 @@ const ContractorTimeline = ({ contractor, profile }) => {
         stepSize = 1;
         formatFunction = (date) => format(date, 'MMM yy');
         current = startOfMonth(current);
-        maxMarkers = 24;
     }
     
-    let markerCount = 0;
-    
     // Generate timeline markers
-    while (current <= timeRange.end && markerCount < maxMarkers) {
+    while (current <= timeRange.end) {
       const daysFromStart = differenceInDays(current, timeRange.start);
       const positionPercent = totalDuration > 0 ? (daysFromStart / totalDuration) * 100 : 0;
       
@@ -269,11 +292,10 @@ const ContractorTimeline = ({ contractor, profile }) => {
       });
       
       current = stepFunction(current, stepSize);
-      markerCount++;
     }
     
     return scale;
-  }, [timeRange, optimalZoomLevel]);
+  }, [timeRange, optimalZoomLevel, containerWidth]);
 
   // Calculate summary statistics
   const summaryStats = useMemo(() => {
@@ -336,7 +358,7 @@ const ContractorTimeline = ({ contractor, profile }) => {
     };
   }, [timelineData, revenueTimelineData]);
 
-  // Calculate Gantt position for contracts (SIMPLIFIED)
+  // Calculate Gantt position with improved scaling
   const calculateGanttPosition = (startDate, endDate) => {
     if (!timeRange.start || !timeRange.end) {
       return { left: '0%', width: '0%' };
@@ -349,15 +371,22 @@ const ContractorTimeline = ({ contractor, profile }) => {
       const contractStartDate = parseISO(startDate);
       const contractEndDate = parseISO(endDate);
       
-      const startOffset = differenceInDays(contractStartDate, timeRange.start);
-      const contractDuration = differenceInDays(contractEndDate, contractStartDate);
+      // Clamp dates to timeline bounds
+      const clampedStart = isAfter(contractStartDate, timeRange.start) ? contractStartDate : timeRange.start;
+      const clampedEnd = isBefore(contractEndDate, timeRange.end) ? contractEndDate : timeRange.end;
       
-      const leftPercent = Math.max(0, Math.min(100, (startOffset / totalDuration) * 100));
-      const widthPercent = Math.max(0.5, Math.min(100 - leftPercent, (contractDuration / totalDuration) * 100));
+      const startOffset = differenceInDays(clampedStart, timeRange.start);
+      const contractDuration = differenceInDays(clampedEnd, clampedStart);
+      
+      const leftPercent = Math.max(0, (startOffset / totalDuration) * 100);
+      const widthPercent = Math.max(0.1, (contractDuration / totalDuration) * 100);
+      
+      // Ensure bar doesn't exceed timeline bounds
+      const adjustedWidth = Math.min(widthPercent, 100 - leftPercent);
       
       return {
         left: `${leftPercent}%`,
-        width: `${widthPercent}%`
+        width: `${adjustedWidth}%`
       };
     } catch (error) {
       console.warn('Error calculating Gantt position for contract:', { startDate, endDate, error });
@@ -585,6 +614,9 @@ const ContractorTimeline = ({ contractor, profile }) => {
             <span className="ml-2 font-medium">
               | Scale: {optimalZoomLevel} ({ganttTimeScale.length} markers)
             </span>
+            <span className="ml-2 text-gray-600">
+              | Container: {containerWidth}px
+            </span>
           </div>
         </div>
       </div>
@@ -711,8 +743,8 @@ const ContractorTimeline = ({ contractor, profile }) => {
             </div>
           </div>
         ) : viewMode === 'gantt' ? (
-          // Gantt Chart View (SIMPLIFIED)
-          <div className="p-6">
+          // Gantt Chart View with responsive scaling
+          <div className="p-6" ref={ganttContainerRef}>
             <h3 className="text-lg font-medium text-gray-900 mb-6">
               📋 Contract Portfolio Gantt Chart
               {contractFilter === 'active' && <span className="text-sm text-green-600 ml-2">(Active Contracts Only)</span>}
@@ -729,16 +761,18 @@ const ContractorTimeline = ({ contractor, profile }) => {
               <>
                 {/* Time Scale Header */}
                 <div className="mb-4 border-b border-gray-200 pb-2 bg-gray-50 rounded-t-lg">
-                  <div className="text-xs text-gray-500 font-medium relative h-12 flex items-end">
+                  <div className="text-xs text-gray-500 font-medium relative h-16 flex items-end">
                     <div style={{width: '280px'}} className="flex-shrink-0 text-center border-r border-gray-300 py-2">
                       <strong>Contract Details</strong>
                     </div>
                     <div className="flex-1 relative px-2">
                       <div className="text-center mb-1 text-gray-700 font-semibold">
                         Timeline: {format(timeRange.start, 'MMM yyyy')} - {format(timeRange.end, 'MMM yyyy')} 
-                        ({optimalZoomLevel.charAt(0).toUpperCase() + optimalZoomLevel.slice(1)} Scale)
+                        <span className="ml-2 text-gray-600">
+                          ({timeRange.totalDays} days, {optimalZoomLevel} scale)
+                        </span>
                       </div>
-                      <div className="relative">
+                      <div className="relative h-6">
                         {ganttTimeScale.map((scaleItem, index) => (
                           <div 
                             key={index}
@@ -746,10 +780,9 @@ const ContractorTimeline = ({ contractor, profile }) => {
                             style={{ 
                               left: `${scaleItem.position}%`,
                               transform: 'translateX(-50%)',
-                              minWidth: '60px'
                             }}
                           >
-                            <div className="text-gray-600 font-medium">
+                            <div className="text-gray-600 font-medium whitespace-nowrap">
                               {scaleItem.label}
                             </div>
                           </div>
@@ -764,7 +797,8 @@ const ContractorTimeline = ({ contractor, profile }) => {
                   {sortedContracts.slice(0, 50).map((contract, index) => {
                     const position = calculateGanttPosition(contract.start_date, contract.end_date);
                     const color = getStatusColor(contract);
-                    const isShortContract = parseFloat(position.width) < 2;
+                    const widthPercent = parseFloat(position.width);
+                    const isShortContract = widthPercent < 5;
                     
                     return (
                       <div key={contract.id || index} className="relative h-8 hover:bg-gray-50 group">
@@ -790,25 +824,22 @@ const ContractorTimeline = ({ contractor, profile }) => {
                         >
                           <div className="relative w-full h-full">
                             <div
-                              className={`absolute rounded-sm shadow-sm border border-white flex items-center px-1 text-white text-xs font-medium overflow-hidden transition-all duration-200 hover:shadow-md ${
-                                isShortContract ? 'min-w-1' : ''
-                              }`}
+                              className={`absolute rounded-sm shadow-sm border border-white flex items-center px-1 text-white text-xs font-medium overflow-hidden transition-all duration-200 hover:shadow-md group-hover:z-20`}
                               style={{
                                 left: position.left,
                                 width: position.width,
                                 height: '24px',
                                 backgroundColor: color,
                                 top: '2px',
-                                minWidth: isShortContract ? '4px' : '2px',
-                                zIndex: 10
+                                minWidth: '2px',
                               }}
                               title={`${contract.title}\n${formatDate(contract.start_date)} - ${formatDate(contract.end_date)}\n${formatCurrency(contract.amount)}\nDuration: ${differenceInDays(parseISO(contract.end_date), parseISO(contract.start_date))} days`}
                             >
                               {!isShortContract && (
                                 <span className="truncate text-xs">
-                                  {optimalZoomLevel === 'years' ? 
-                                    format(parseISO(contract.start_date), 'yyyy') :
-                                    `${format(parseISO(contract.start_date), 'MMM yy')} - ${format(parseISO(contract.end_date), 'MMM yy')}`
+                                  {differenceInDays(parseISO(contract.end_date), parseISO(contract.start_date)) < 365 ?
+                                    `${format(parseISO(contract.start_date), 'MMM yy')}` :
+                                    `${format(parseISO(contract.start_date), 'yy')}-${format(parseISO(contract.end_date), 'yy')}`
                                   }
                                 </span>
                               )}
@@ -842,6 +873,8 @@ const ContractorTimeline = ({ contractor, profile }) => {
                   <div className="text-sm text-gray-600 bg-gray-50 p-3 rounded-lg">
                     <strong>Timeline:</strong> Showing {sortedContracts.length} contracts with {ganttTimeScale.length} timeline markers. 
                     {sortedContracts.length > 50 && ' (First 50 contracts shown for performance)'}
+                    <br />
+                    <strong>Container Width:</strong> {containerWidth}px | <strong>Days per pixel:</strong> {(timeRange.totalDays / containerWidth).toFixed(2)}
                   </div>
                 </div>
               </>
@@ -930,8 +963,8 @@ const ContractorTimeline = ({ contractor, profile }) => {
             with {summaryStats.maxContracts} simultaneous contracts.
           </p>
           <p>
-            <strong>Timeline View:</strong> Simplified Gantt chart with {optimalZoomLevel} scale and {ganttTimeScale.length} markers 
-            for better readability and performance.
+            <strong>Timeline View:</strong> Responsive Gantt chart with {optimalZoomLevel} scale optimized for {containerWidth}px screen width, 
+            showing {timeRange.totalDays} days with {ganttTimeScale.length} markers.
           </p>
         </div>
       </div>
