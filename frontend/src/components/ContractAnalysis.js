@@ -1,12 +1,13 @@
 // frontend/src/components/ContractAnalysis.js
 import React, { useState, useEffect } from 'react';
-import { format, parseISO, getYear, getMonth, startOfYear, endOfYear, isWithinInterval, differenceInDays } from 'date-fns';
+import { format, parseISO, getYear, getMonth, startOfYear, endOfYear, isWithinInterval, differenceInDays, isAfter, isBefore } from 'date-fns';
 
 const ContractAnalysis = ({ contract, mods, onClose }) => {
-  const [activeTab, setActiveTab] = useState('calendar');
   const [calendarData, setCalendarData] = useState([]);
   const [fiscalData, setFiscalData] = useState([]);
   const [performanceData, setPerformanceData] = useState([]);
+  const [allMods, setAllMods] = useState([]);
+  const [timelineData, setTimelineData] = useState(null);
 
   useEffect(() => {
     if (contract && mods) {
@@ -16,7 +17,7 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
 
   const analyzeContract = () => {
     // Combine base contract and mods
-    const allMods = [
+    const combinedMods = [
       {
         mod_number: 'BASE',
         award_date: contract.award_date,
@@ -27,23 +28,79 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
     ];
 
     // Sort by date
-    allMods.sort((a, b) => new Date(a.award_date) - new Date(b.award_date));
+    combinedMods.sort((a, b) => new Date(a.award_date) - new Date(b.award_date));
+    setAllMods(combinedMods);
 
     // Get contract date range
     const startDate = parseISO(contract.start_date || contract.award_date);
     const endDate = contract.end_date ? parseISO(contract.end_date) : new Date();
 
     // Analyze by calendar year
-    const calendarYearData = analyzeByCalendarYear(allMods, startDate, endDate);
+    const calendarYearData = analyzeByCalendarYear(combinedMods, startDate, endDate);
     setCalendarData(calendarYearData);
 
     // Analyze by fiscal year
-    const fiscalYearData = analyzeByFiscalYear(allMods, startDate, endDate);
+    const fiscalYearData = analyzeByFiscalYear(combinedMods, startDate, endDate);
     setFiscalData(fiscalYearData);
 
     // Analyze by performance period
-    const performancePeriodData = analyzeByPerformancePeriod(allMods, startDate, endDate);
+    const performancePeriodData = analyzeByPerformancePeriod(combinedMods, startDate, endDate);
     setPerformanceData(performancePeriodData);
+
+    // Create unified timeline data
+    createUnifiedTimeline(combinedMods, startDate, endDate, calendarYearData, fiscalYearData, performancePeriodData);
+  };
+
+  const createUnifiedTimeline = (mods, startDate, endDate, calendarData, fiscalData, performanceData) => {
+    const timeline = {
+      startDate,
+      endDate,
+      mods,
+      calendarMarkers: [],
+      fiscalMarkers: [],
+      performanceMarkers: []
+    };
+
+    // Create calendar year markers
+    calendarData.forEach((yearData) => {
+      if (yearData.totalAmount > 0) {
+        const endDate = new Date(parseInt(yearData.year), 11, 31); // Dec 31
+        timeline.calendarMarkers.push({
+          date: endDate,
+          label: yearData.year,
+          amount: yearData.totalAmount
+        });
+      }
+    });
+
+    // Create fiscal year markers
+    fiscalData.forEach((fyData) => {
+      if (fyData.totalAmount > 0) {
+        const fy = parseInt(fyData.year.replace('FY', ''));
+        const endDate = new Date(fy - 1, 8, 30); // Sep 30
+        timeline.fiscalMarkers.push({
+          date: endDate,
+          label: fyData.year,
+          amount: fyData.totalAmount
+        });
+      }
+    });
+
+    // Create performance period markers
+    performanceData.forEach((periodData, idx) => {
+      if (periodData.totalAmount > 0) {
+        // Parse the end date from the period string
+        const periodEndStr = periodData.period.split(' - ')[1];
+        const endDate = parseISO(periodEndStr);
+        timeline.performanceMarkers.push({
+          date: endDate,
+          label: periodData.year,
+          amount: periodData.totalAmount
+        });
+      }
+    });
+
+    setTimelineData(timeline);
   };
 
   const analyzeByCalendarYear = (mods, startDate, endDate) => {
@@ -153,6 +210,184 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
     }).format(amount || 0);
   };
 
+  const formatCompactCurrency = (amount) => {
+    if (amount >= 1000000) {
+      return `$${(amount / 1000000).toFixed(1)}M`;
+    } else if (amount >= 1000) {
+      return `$${(amount / 1000).toFixed(0)}K`;
+    }
+    return formatCurrency(amount);
+  };
+
+  const renderUnifiedChart = () => {
+    if (!timelineData) return null;
+
+    const { startDate, endDate, mods, calendarMarkers, fiscalMarkers, performanceMarkers } = timelineData;
+    const maxAmount = Math.max(...mods.map(m => m.award_amount || 0));
+    const chartHeight = 450;
+    const chartWidth = 1200;
+    const padding = { top: 40, right: 80, bottom: 200, left: 100 };
+    const plotWidth = chartWidth - padding.left - padding.right;
+    const plotHeight = chartHeight - padding.top - padding.bottom;
+
+    // Time scale
+    const totalDays = differenceInDays(endDate, startDate);
+    const getXPosition = (date) => {
+      const days = differenceInDays(date, startDate);
+      return padding.left + (days / totalDays) * plotWidth;
+    };
+
+    return (
+      <div className="mb-8">
+        <h3 className="text-lg font-semibold mb-4">Unified Contract Modification Timeline</h3>
+        <div className="overflow-x-auto">
+          <svg width={chartWidth} height={chartHeight} className="bg-white border border-gray-200">
+            {/* Y-axis */}
+            <line x1={padding.left} y1={padding.top} x2={padding.left} y2={chartHeight - padding.bottom} stroke="#e5e7eb" />
+            
+            {/* X-axis */}
+            <line x1={padding.left} y1={chartHeight - padding.bottom} x2={chartWidth - padding.right} y2={chartHeight - padding.bottom} stroke="#e5e7eb" />
+            
+            {/* Y-axis labels */}
+            {[0, 0.25, 0.5, 0.75, 1].map((tick) => {
+              const y = chartHeight - padding.bottom - (tick * plotHeight);
+              const value = tick * maxAmount;
+              return (
+                <g key={tick}>
+                  <line x1={padding.left - 5} y1={y} x2={padding.left} y2={y} stroke="#9ca3af" />
+                  <text x={padding.left - 10} y={y + 4} textAnchor="end" className="text-xs fill-gray-600">
+                    {formatCompactCurrency(value)}
+                  </text>
+                </g>
+              );
+            })}
+
+            {/* Plot modifications */}
+            {mods.map((mod, idx) => {
+              const modDate = parseISO(mod.award_date);
+              const x = getXPosition(modDate);
+              const y = chartHeight - padding.bottom - ((mod.award_amount || 0) / maxAmount) * plotHeight;
+              
+              return (
+                <g key={idx}>
+                  {/* Vertical line to baseline */}
+                  <line x1={x} y1={chartHeight - padding.bottom} x2={x} y2={y} stroke="#6b7280" strokeWidth="1" opacity="0.3" />
+                  
+                  {/* Mod point */}
+                  <circle cx={x} cy={y} r="5" fill="#6b7280" stroke="white" strokeWidth="2">
+                    <title>{`${mod.mod_number}: ${formatCurrency(mod.award_amount)} on ${format(modDate, 'MMM dd, yyyy')}`}</title>
+                  </circle>
+                  
+                  {/* Mod label for significant amounts */}
+                  {mod.award_amount > maxAmount * 0.15 && (
+                    <text x={x} y={y - 8} textAnchor="middle" className="text-xs font-medium fill-gray-700">
+                      {mod.mod_number}
+                    </text>
+                  )}
+                </g>
+              );
+            })}
+
+            {/* Calendar Year Markers */}
+            {calendarMarkers.map((marker, idx) => {
+              const x = getXPosition(marker.date);
+              if (x < padding.left || x > chartWidth - padding.right) return null;
+              
+              return (
+                <g key={`cal-${idx}`}>
+                  {/* Vertical line */}
+                  <line x1={x} y1={padding.top} x2={x} y2={chartHeight - padding.bottom} stroke="#10b981" strokeWidth="2" opacity="0.3" />
+                  
+                  {/* Year label */}
+                  <text x={x} y={chartHeight - padding.bottom + 20} textAnchor="middle" className="text-sm font-medium fill-green-600">
+                    CY{marker.label}
+                  </text>
+                  
+                  {/* Amount */}
+                  <text x={x} y={chartHeight - padding.bottom + 35} textAnchor="middle" className="text-xs font-semibold fill-green-700">
+                    {formatCompactCurrency(marker.amount)}
+                  </text>
+                </g>
+              );
+            })}
+
+            {/* Fiscal Year Markers */}
+            {fiscalMarkers.map((marker, idx) => {
+              const x = getXPosition(marker.date);
+              if (x < padding.left || x > chartWidth - padding.right) return null;
+              
+              return (
+                <g key={`fy-${idx}`}>
+                  {/* Vertical line */}
+                  <line x1={x} y1={padding.top} x2={x} y2={chartHeight - padding.bottom} stroke="#3b82f6" strokeWidth="2" opacity="0.3" strokeDasharray="5,5" />
+                  
+                  {/* Year label */}
+                  <text x={x} y={chartHeight - padding.bottom + 60} textAnchor="middle" className="text-sm font-medium fill-blue-600">
+                    {marker.label}
+                  </text>
+                  
+                  {/* Amount */}
+                  <text x={x} y={chartHeight - padding.bottom + 75} textAnchor="middle" className="text-xs font-semibold fill-blue-700">
+                    {formatCompactCurrency(marker.amount)}
+                  </text>
+                </g>
+              );
+            })}
+
+            {/* Performance Period Markers */}
+            {performanceMarkers.map((marker, idx) => {
+              const x = getXPosition(marker.date);
+              if (x < padding.left || x > chartWidth - padding.right) return null;
+              
+              return (
+                <g key={`pp-${idx}`}>
+                  {/* Vertical line */}
+                  <line x1={x} y1={padding.top} x2={x} y2={chartHeight - padding.bottom} stroke="#f59e0b" strokeWidth="2" opacity="0.3" strokeDasharray="2,2" />
+                  
+                  {/* Year label */}
+                  <text x={x} y={chartHeight - padding.bottom + 100} textAnchor="middle" className="text-sm font-medium fill-amber-600">
+                    PP {marker.label}
+                  </text>
+                  
+                  {/* Amount */}
+                  <text x={x} y={chartHeight - padding.bottom + 115} textAnchor="middle" className="text-xs font-semibold fill-amber-700">
+                    {formatCompactCurrency(marker.amount)}
+                  </text>
+                </g>
+              );
+            })}
+
+            {/* Chart title */}
+            <text x={chartWidth / 2} y={20} textAnchor="middle" className="text-base font-semibold fill-gray-700">
+              Contract Modifications Across All Calendar Types
+            </text>
+
+            {/* Legend */}
+            <g transform={`translate(${padding.left}, ${chartHeight - 50})`}>
+              <text x="0" y="0" className="text-xs font-medium fill-gray-600">Legend:</text>
+              
+              {/* Calendar Year */}
+              <line x1="80" y1="-3" x2="100" y2="-3" stroke="#10b981" strokeWidth="2" />
+              <text x="105" y="0" className="text-xs fill-gray-600">Calendar Year (CY)</text>
+              
+              {/* Fiscal Year */}
+              <line x1="250" y1="-3" x2="270" y2="-3" stroke="#3b82f6" strokeWidth="2" strokeDasharray="5,5" />
+              <text x="275" y="0" className="text-xs fill-gray-600">Fiscal Year (FY)</text>
+              
+              {/* Performance Period */}
+              <line x1="400" y1="-3" x2="420" y2="-3" stroke="#f59e0b" strokeWidth="2" strokeDasharray="2,2" />
+              <text x="425" y="0" className="text-xs fill-gray-600">Performance Period (PP)</text>
+              
+              {/* Modifications */}
+              <circle cx="590" cy="-3" r="4" fill="#6b7280" />
+              <text x="600" y="0" className="text-xs fill-gray-600">Modifications</text>
+            </g>
+          </svg>
+        </div>
+      </div>
+    );
+  };
+
   const renderTable = (data, title) => (
     <div className="mb-8">
       <h3 className="text-lg font-semibold mb-4">{title}</h3>
@@ -167,7 +402,7 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-200">
-            {data.map((row, idx) => (
+            {data.filter(row => row.totalAmount > 0).map((row, idx) => (
               <tr key={idx} className="hover:bg-gray-50">
                 <td className="px-4 py-2 whitespace-nowrap font-medium">{row.year}</td>
                 <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-600">{row.period}</td>
@@ -187,105 +422,9 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
     </div>
   );
 
-  const renderChart = (data, title, color) => {
-    const maxAmount = Math.max(...data.flatMap(d => d.mods.map(m => m.award_amount || 0)));
-    const chartHeight = 300;
-    const chartWidth = 800;
-    const padding = { top: 40, right: 150, bottom: 60, left: 80 };
-    const plotWidth = chartWidth - padding.left - padding.right;
-    const plotHeight = chartHeight - padding.top - padding.bottom;
-
-    return (
-      <div className="mb-8">
-        <h3 className="text-lg font-semibold mb-4">{title} - Modification Timeline</h3>
-        <div className="overflow-x-auto">
-          <svg width={chartWidth} height={chartHeight} className="bg-white border border-gray-200">
-            {/* Y-axis */}
-            <line x1={padding.left} y1={padding.top} x2={padding.left} y2={chartHeight - padding.bottom} stroke="#e5e7eb" />
-            
-            {/* X-axis */}
-            <line x1={padding.left} y1={chartHeight - padding.bottom} x2={chartWidth - padding.right} y2={chartHeight - padding.bottom} stroke="#e5e7eb" />
-            
-            {/* Y-axis labels */}
-            {[0, 0.25, 0.5, 0.75, 1].map((tick) => {
-              const y = chartHeight - padding.bottom - (tick * plotHeight);
-              const value = tick * maxAmount;
-              return (
-                <g key={tick}>
-                  <line x1={padding.left - 5} y1={y} x2={padding.left} y2={y} stroke="#9ca3af" />
-                  <text x={padding.left - 10} y={y + 4} textAnchor="end" className="text-xs fill-gray-600">
-                    {formatCurrency(value)}
-                  </text>
-                </g>
-              );
-            })}
-
-            {/* Plot data */}
-            {data.map((yearData, yearIdx) => {
-              const yearX = padding.left + (yearIdx / (data.length - 1)) * plotWidth;
-              const yearWidth = plotWidth / data.length;
-              
-              return (
-                <g key={yearIdx}>
-                  {/* Year divider */}
-                  <line x1={yearX + yearWidth} y1={padding.top} x2={yearX + yearWidth} y2={chartHeight - padding.bottom} stroke="#e5e7eb" strokeDasharray="2,2" />
-                  
-                  {/* Year label */}
-                  <text x={yearX + yearWidth / 2} y={chartHeight - padding.bottom + 20} textAnchor="middle" className="text-xs font-medium fill-gray-700">
-                    {yearData.year}
-                  </text>
-                  
-                  {/* Period label */}
-                  <text x={yearX + yearWidth / 2} y={chartHeight - padding.bottom + 35} textAnchor="middle" className="text-xs fill-gray-500">
-                    {yearData.period.split(' - ')[0]}
-                  </text>
-                  
-                  {/* Total amount at end of period */}
-                  <text x={yearX + yearWidth - 5} y={chartHeight - padding.bottom - 5} textAnchor="end" className="text-xs font-semibold fill-gray-700">
-                    {formatCurrency(yearData.totalAmount)}
-                  </text>
-                  
-                  {/* Plot mods */}
-                  {yearData.mods.map((mod, modIdx) => {
-                    const modX = yearX + (modIdx / Math.max(yearData.mods.length - 1, 1)) * yearWidth * 0.8 + yearWidth * 0.1;
-                    const modY = chartHeight - padding.bottom - ((mod.award_amount || 0) / maxAmount) * plotHeight;
-                    
-                    return (
-                      <g key={modIdx}>
-                        {/* Vertical line to baseline */}
-                        <line x1={modX} y1={chartHeight - padding.bottom} x2={modX} y2={modY} stroke={color} strokeWidth="2" opacity="0.3" />
-                        
-                        {/* Mod point */}
-                        <circle cx={modX} cy={modY} r="4" fill={color} stroke="white" strokeWidth="2">
-                          <title>{`${mod.mod_number}: ${formatCurrency(mod.award_amount)} on ${format(parseISO(mod.award_date), 'MMM dd, yyyy')}`}</title>
-                        </circle>
-                        
-                        {/* Mod label for significant amounts */}
-                        {mod.award_amount > maxAmount * 0.1 && (
-                          <text x={modX} y={modY - 8} textAnchor="middle" className="text-xs font-medium" fill={color}>
-                            {mod.mod_number}
-                          </text>
-                        )}
-                      </g>
-                    );
-                  })}
-                </g>
-              );
-            })}
-
-            {/* Chart title */}
-            <text x={chartWidth / 2} y={20} textAnchor="middle" className="text-sm font-semibold fill-gray-700">
-              Contract Modifications by {title}
-            </text>
-          </svg>
-        </div>
-      </div>
-    );
-  };
-
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg shadow-xl max-w-6xl w-full max-h-[90vh] overflow-hidden">
+      <div className="bg-white rounded-lg shadow-xl max-w-7xl w-full max-h-[90vh] overflow-hidden">
         {/* Header */}
         <div className="bg-green-600 text-white p-6">
           <div className="flex justify-between items-start">
@@ -306,72 +445,36 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
           </div>
         </div>
 
-        {/* Tabs */}
-        <div className="border-b border-gray-200">
-          <nav className="flex -mb-px">
-            {[
-              { id: 'calendar', label: 'Calendar Year' },
-              { id: 'fiscal', label: 'Fiscal Year' },
-              { id: 'performance', label: 'Performance Period' },
-            ].map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`py-2 px-6 border-b-2 font-medium text-sm ${
-                  activeTab === tab.id
-                    ? 'border-green-500 text-green-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </nav>
-        </div>
-
         {/* Content */}
-        <div className="p-6 overflow-y-auto" style={{ maxHeight: 'calc(90vh - 240px)' }}>
-          {activeTab === 'calendar' && (
-            <>
-              {renderTable(calendarData, 'Calendar Year Analysis')}
-              {renderChart(calendarData, 'Calendar Year', '#10b981')}
-            </>
-          )}
+        <div className="p-6 overflow-y-auto" style={{ maxHeight: 'calc(90vh - 160px)' }}>
+          {/* Unified Chart */}
+          {renderUnifiedChart()}
           
-          {activeTab === 'fiscal' && (
-            <>
-              {renderTable(fiscalData, 'Fiscal Year Analysis')}
-              {renderChart(fiscalData, 'Fiscal Year', '#3b82f6')}
-            </>
-          )}
-          
-          {activeTab === 'performance' && (
-            <>
-              {renderTable(performanceData, 'Performance Period Analysis')}
-              {renderChart(performanceData, 'Performance Period', '#f59e0b')}
-            </>
-          )}
+          {/* Tables */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-8">
+            <div>{renderTable(calendarData, 'Calendar Year Analysis')}</div>
+            <div>{renderTable(fiscalData, 'Fiscal Year Analysis')}</div>
+            <div>{renderTable(performanceData, 'Performance Period Analysis')}</div>
+          </div>
           
           {/* Modification Details */}
           <div className="mt-8">
             <h3 className="text-lg font-semibold mb-4">Modification Details</h3>
             <div className="space-y-2">
-              {[...mods, { mod_number: 'BASE', award_date: contract.award_date, award_amount: contract.award_amount, description: 'Base Contract Award' }]
-                .sort((a, b) => new Date(a.award_date) - new Date(b.award_date))
-                .map((mod, idx) => (
-                  <div key={idx} className="flex justify-between items-center p-3 bg-gray-50 rounded">
-                    <div>
-                      <span className="font-medium">{mod.mod_number}</span>
-                      <span className="text-sm text-gray-600 ml-2">
-                        {format(parseISO(mod.award_date), 'MMM dd, yyyy')}
-                      </span>
-                      {mod.description && (
-                        <span className="text-sm text-gray-500 ml-2">- {mod.description}</span>
-                      )}
-                    </div>
-                    <span className="font-medium">{formatCurrency(mod.award_amount)}</span>
+              {allMods.map((mod, idx) => (
+                <div key={idx} className="flex justify-between items-center p-3 bg-gray-50 rounded">
+                  <div>
+                    <span className="font-medium">{mod.mod_number}</span>
+                    <span className="text-sm text-gray-600 ml-2">
+                      {format(parseISO(mod.award_date), 'MMM dd, yyyy')}
+                    </span>
+                    {mod.description && (
+                      <span className="text-sm text-gray-500 ml-2">- {mod.description}</span>
+                    )}
                   </div>
-                ))}
+                  <span className="font-medium">{formatCurrency(mod.award_amount)}</span>
+                </div>
+              ))}
             </div>
           </div>
         </div>
