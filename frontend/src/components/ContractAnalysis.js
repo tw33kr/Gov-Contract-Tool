@@ -1,6 +1,6 @@
 // frontend/src/components/ContractAnalysis.js
-import React, { useState, useEffect } from 'react';
-import { format, parseISO, getYear, getMonth, startOfYear, endOfYear, isWithinInterval, differenceInDays, isAfter, isBefore } from 'date-fns';
+import React, { useState, useEffect, useCallback } from 'react';
+import { format, parseISO, getYear, getMonth, startOfYear, endOfYear, isWithinInterval, differenceInDays } from 'date-fns';
 
 const ContractAnalysis = ({ contract, mods, onClose }) => {
   const [calendarData, setCalendarData] = useState([]);
@@ -9,13 +9,7 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
   const [allMods, setAllMods] = useState([]);
   const [timelineData, setTimelineData] = useState(null);
 
-  useEffect(() => {
-    if (contract && mods) {
-      analyzeContract();
-    }
-  }, [contract, mods]);
-
-  const analyzeContract = () => {
+  const analyzeContract = useCallback(() => {
     // Combine base contract and mods
     const combinedMods = [
       {
@@ -49,7 +43,13 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
 
     // Create unified timeline data
     createUnifiedTimeline(combinedMods, startDate, endDate, calendarYearData, fiscalYearData, performancePeriodData);
-  };
+  }, [contract, mods]);
+
+  useEffect(() => {
+    if (contract && mods) {
+      analyzeContract();
+    }
+  }, [contract, mods, analyzeContract]);
 
   const createUnifiedTimeline = (mods, startDate, endDate, calendarData, fiscalData, performanceData) => {
     const timeline = {
@@ -87,7 +87,7 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
     });
 
     // Create performance period markers
-    performanceData.forEach((periodData, idx) => {
+    performanceData.forEach((periodData) => {
       if (periodData.totalAmount > 0) {
         // Parse the end date from the period string
         const periodEndStr = periodData.period.split(' - ')[1];
@@ -178,11 +178,15 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
       
       const periodEnd = currentEnd > endDate ? endDate : currentEnd;
       
-      const yearMods = mods.filter(mod => {
-        const modDate = parseISO(mod.award_date);
-        return isWithinInterval(modDate, { start: currentStart, end: periodEnd });
-      });
-
+      // Create a closure to capture the current values
+      const filterMods = (start, end) => {
+        return mods.filter(mod => {
+          const modDate = parseISO(mod.award_date);
+          return isWithinInterval(modDate, { start, end });
+        });
+      };
+      
+      const yearMods = filterMods(currentStart, periodEnd);
       const totalAmount = yearMods.reduce((sum, mod) => sum + (mod.award_amount || 0), 0);
       
       yearlyData.push({

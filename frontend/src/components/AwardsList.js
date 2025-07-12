@@ -1,7 +1,7 @@
 // frontend/src/components/AwardsList.js
 import React, { useState } from 'react';
 import ContractAnalysis from './ContractAnalysis';
-import { getContractMods } from '../services/api';
+// import { getContractMods } from '../services/api'; // Commented out - using mock data for now
 
 const AwardsList = ({ awards, loading }) => {
   const [sortBy, setSortBy] = useState('award_date');
