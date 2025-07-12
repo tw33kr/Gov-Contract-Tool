@@ -113,16 +113,27 @@ export const searchAwards = async (params = {}) => {
   }
 };
 
-// Get contract modifications
+// Get contract transaction history (modifications)
 export const getContractMods = async (contractId) => {
   try {
-    console.log('📝 Getting contract modifications for:', contractId);
-    const response = await api.get(`/api/contracts/${contractId}/modifications`);
-    console.log('✅ Contract mods response:', response);
-    return response.modifications || [];
+    console.log('📝 Getting contract transaction history for:', contractId);
+    const response = await api.get(`/api/contracts/contract/${contractId}/transactions`);
+    console.log('✅ Contract transactions response:', response);
+    
+    // Convert transactions to modifications format expected by ContractAnalysis component
+    if (response.transactions && Array.isArray(response.transactions)) {
+      return response.transactions.map(tx => ({
+        mod_number: tx.mod_number || 'Unknown',
+        award_date: tx.award_date,
+        award_amount: tx.award_amount || 0,
+        description: tx.description || tx.action_type || 'Transaction'
+      }));
+    }
+    
+    return [];
   } catch (error) {
-    console.error('Error getting contract modifications:', error);
-    // Return empty array for now - in production this would fetch real mods
+    console.error('Error getting contract transactions:', error);
+    // Return empty array if error
     return [];
   }
 };
