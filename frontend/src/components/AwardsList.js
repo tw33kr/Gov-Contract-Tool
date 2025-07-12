@@ -65,12 +65,12 @@ const AwardsList = ({ awards, loading }) => {
     }
   };
 
-  const toggleExpanded = (contractId) => {
+  const toggleExpanded = (awardId) => {
     const newExpanded = new Set(expandedAwards);
-    if (newExpanded.has(contractId)) {
-      newExpanded.delete(contractId);
+    if (newExpanded.has(awardId)) {
+      newExpanded.delete(awardId);
     } else {
-      newExpanded.add(contractId);
+      newExpanded.add(awardId);
     }
     setExpandedAwards(newExpanded);
   };
@@ -128,11 +128,13 @@ const AwardsList = ({ awards, loading }) => {
 
       {/* Awards Cards */}
       <div className="divide-y divide-gray-200">
-        {sortedAwards.map((award) => {
-          const isExpanded = expandedAwards.has(award.contract_id);
+        {sortedAwards.map((award, index) => {
+          // Use award_id if available, otherwise use contract_id or fallback to index
+          const awardIdentifier = award.award_id || award.contract_id || `award-${index}`;
+          const isExpanded = expandedAwards.has(awardIdentifier);
           
           return (
-            <div key={award.contract_id} className="p-6 hover:bg-gray-50 transition-colors">
+            <div key={awardIdentifier} className="p-6 hover:bg-gray-50 transition-colors">
               {/* Award Header */}
               <div className="flex justify-between items-start mb-3">
                 <div className="flex-1">
@@ -140,13 +142,13 @@ const AwardsList = ({ awards, loading }) => {
                     {award.title}
                   </h3>
                   <div className="flex flex-wrap gap-4 text-sm text-gray-600">
-                    <span className="font-medium text-green-600">🏆 {award.vendor_name}</span>
-                    <span className="font-medium">{award.agency}</span>
-                    {award.subagency && <span>{award.subagency}</span>}
+                    <span className="font-medium text-green-600">🏆 {award.vendor_name || award.recipient_name}</span>
+                    <span className="font-medium">{award.agency || award.awarding_agency}</span>
+                    {(award.subagency || award.awarding_subagency) && <span>{award.subagency || award.awarding_subagency}</span>}
                     <span>Awarded: {formatDate(award.award_date)}</span>
-                    {award.contract_id && (
+                    {(award.contract_id || award.award_id) && (
                       <span className="font-mono bg-gray-100 px-2 py-1 rounded">
-                        {award.contract_id}
+                        {award.contract_id || award.award_id}
                       </span>
                     )}
                   </div>
@@ -176,14 +178,14 @@ const AwardsList = ({ awards, loading }) => {
                     PSC: {award.psc_code}
                   </span>
                 )}
-                {award.set_aside_type && (
+                {(award.set_aside_type || award.set_aside) && (
                   <span className="bg-orange-100 text-orange-800 text-xs px-2 py-1 rounded-full">
-                    {award.set_aside_type}
+                    {award.set_aside_type || award.set_aside}
                   </span>
                 )}
-                {award.contract_type && (
+                {(award.contract_type || award.award_type) && (
                   <span className="bg-gray-100 text-gray-800 text-xs px-2 py-1 rounded-full">
-                    {award.contract_type}
+                    {award.contract_type || award.award_type}
                   </span>
                 )}
                 {award.competition_type && (
@@ -191,9 +193,9 @@ const AwardsList = ({ awards, loading }) => {
                     {award.competition_type}
                   </span>
                 )}
-                {(award.place_of_performance_city || award.place_of_performance_state) && (
+                {(award.place_of_performance_city || award.place_of_performance_state || award.place_of_performance) && (
                   <span className="bg-yellow-100 text-yellow-800 text-xs px-2 py-1 rounded-full">
-                    📍 {award.place_of_performance_city}, {award.place_of_performance_state}
+                    📍 {award.place_of_performance || `${award.place_of_performance_city}, ${award.place_of_performance_state}`}
                   </span>
                 )}
               </div>
@@ -201,7 +203,7 @@ const AwardsList = ({ awards, loading }) => {
               {/* Action Buttons */}
               <div className="flex justify-between items-center">
                 <button
-                  onClick={() => toggleExpanded(award.contract_id)}
+                  onClick={() => toggleExpanded(awardIdentifier)}
                   className="text-green-600 hover:text-green-800 font-medium text-sm"
                 >
                   {isExpanded ? 'Show Less' : 'Show More Details'}
@@ -216,23 +218,23 @@ const AwardsList = ({ awards, loading }) => {
                       const awardText = `
 Contract Award Details:
 Title: ${award.title}
-Vendor: ${award.vendor_name}
-Agency: ${award.agency}
+Vendor: ${award.vendor_name || award.recipient_name}
+Agency: ${award.agency || award.awarding_agency}
 Award Date: ${formatDate(award.award_date)}
 Award Amount: ${formatCurrency(award.award_amount)}
-Contract ID: ${award.contract_id}
+Contract ID: ${award.contract_id || award.award_id}
 NAICS: ${award.naics_code} - ${award.naics_description || 'N/A'}
 PSC: ${award.psc_code} - ${award.psc_description || 'N/A'}
-Set-Aside: ${award.set_aside_type || 'N/A'}
+Set-Aside: ${award.set_aside_type || award.set_aside || 'N/A'}
 Competition: ${award.competition_type || 'N/A'}
-Performance Location: ${award.place_of_performance_city || 'N/A'}, ${award.place_of_performance_state || 'N/A'}
+Performance Location: ${award.place_of_performance || `${award.place_of_performance_city || 'N/A'}, ${award.place_of_performance_state || 'N/A'}`}
                       `.trim();
                       
                       const blob = new Blob([awardText], { type: 'text/plain' });
                       const url = URL.createObjectURL(blob);
                       const link = document.createElement('a');
                       link.href = url;
-                      link.download = `award-${award.contract_id}.txt`;
+                      link.download = `award-${award.contract_id || award.award_id}.txt`;
                       link.click();
                     }}
                     className="border border-gray-300 text-gray-700 px-3 py-1 rounded text-sm hover:bg-gray-50 transition-colors"
@@ -253,7 +255,7 @@ Performance Location: ${award.place_of_performance_city || 'N/A'}, ${award.place
                         <div className="space-y-2 text-sm">
                           <div className="flex justify-between">
                             <span className="text-gray-600">Contract ID:</span>
-                            <span className="font-mono">{award.contract_id}</span>
+                            <span className="font-mono">{award.contract_id || award.award_id}</span>
                           </div>
                           
                           {award.start_date && (
@@ -270,10 +272,10 @@ Performance Location: ${award.place_of_performance_city || 'N/A'}, ${award.place
                             </div>
                           )}
                           
-                          {award.contract_type && (
+                          {(award.contract_type || award.award_type) && (
                             <div className="flex justify-between">
                               <span className="text-gray-600">Contract Type:</span>
-                              <span>{award.contract_type}</span>
+                              <span>{award.contract_type || award.award_type}</span>
                             </div>
                           )}
                         </div>
@@ -295,6 +297,13 @@ Performance Location: ${award.place_of_performance_city || 'N/A'}, ${award.place
                               <p className="mt-1 text-gray-900">{award.psc_description}</p>
                             </div>
                           )}
+                          
+                          {award.description && (
+                            <div>
+                              <span className="text-gray-600">Description:</span>
+                              <p className="mt-1 text-gray-900">{award.description}</p>
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -306,7 +315,7 @@ Performance Location: ${award.place_of_performance_city || 'N/A'}, ${award.place
                         <div className="space-y-2 text-sm">
                           <div className="flex justify-between">
                             <span className="text-gray-600">Vendor Name:</span>
-                            <span className="font-semibold">{award.vendor_name}</span>
+                            <span className="font-semibold">{award.vendor_name || award.recipient_name}</span>
                           </div>
                           
                           {award.vendor_duns && (
@@ -335,10 +344,10 @@ Performance Location: ${award.place_of_performance_city || 'N/A'}, ${award.place
                             </div>
                           )}
                           
-                          {award.set_aside_type && (
+                          {(award.set_aside_type || award.set_aside) && (
                             <div className="flex justify-between">
                               <span className="text-gray-600">Set-Aside:</span>
-                              <span>{award.set_aside_type}</span>
+                              <span>{award.set_aside_type || award.set_aside}</span>
                             </div>
                           )}
                         </div>
