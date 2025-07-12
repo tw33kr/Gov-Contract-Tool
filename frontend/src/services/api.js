@@ -113,6 +113,20 @@ export const searchAwards = async (params = {}) => {
   }
 };
 
+// Get contract modifications
+export const getContractMods = async (contractId) => {
+  try {
+    console.log('📝 Getting contract modifications for:', contractId);
+    const response = await api.get(`/api/contracts/${contractId}/modifications`);
+    console.log('✅ Contract mods response:', response);
+    return response.modifications || [];
+  } catch (error) {
+    console.error('Error getting contract modifications:', error);
+    // Return empty array for now - in production this would fetch real mods
+    return [];
+  }
+};
+
 // Get awards analytics
 export const getAwardsAnalytics = async () => {
   try {
