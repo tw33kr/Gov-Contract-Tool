@@ -1,7 +1,7 @@
 // frontend/src/components/AwardsList.js
 import React, { useState } from 'react';
 import ContractAnalysis from './ContractAnalysis';
-// import { getContractMods } from '../services/api'; // Commented out - using mock data for now
+import { getContractMods } from '../services/api';
 
 const AwardsList = ({ awards, loading }) => {
   const [sortBy, setSortBy] = useState('award_date');
@@ -85,30 +85,20 @@ const AwardsList = ({ awards, loading }) => {
     setSelectedContract(award);
     
     try {
-      // For now, use mock data for mods
-      // In production, this would call the API: const mods = await getContractMods(award.contract_id || award.award_id);
-      const mockMods = [
-        {
-          mod_number: 'P00001',
-          award_date: new Date(new Date(award.award_date).getTime() + 90 * 24 * 60 * 60 * 1000).toISOString(),
-          award_amount: award.award_amount * 0.2,
-          description: 'Scope expansion for additional services'
-        },
-        {
-          mod_number: 'P00002',
-          award_date: new Date(new Date(award.award_date).getTime() + 180 * 24 * 60 * 60 * 1000).toISOString(),
-          award_amount: award.award_amount * 0.15,
-          description: 'Exercise of Option Year 1'
-        },
-        {
-          mod_number: 'P00003',
-          award_date: new Date(new Date(award.award_date).getTime() + 365 * 24 * 60 * 60 * 1000).toISOString(),
-          award_amount: award.award_amount * 0.3,
-          description: 'Exercise of Option Year 2 with additional requirements'
-        }
-      ];
+      // Use the PIID or award_id to get transaction history from USASpending
+      const contractId = award.piid || award.contract_id || award.award_id;
       
-      setContractMods(mockMods);
+      if (!contractId) {
+        console.error('No contract ID available for analysis');
+        setContractMods([]);
+        return;
+      }
+      
+      console.log('Fetching transaction history for contract:', contractId);
+      const mods = await getContractMods(contractId);
+      
+      console.log('Retrieved modifications:', mods);
+      setContractMods(mods);
     } catch (error) {
       console.error('Error loading contract mods:', error);
       setContractMods([]);
@@ -193,9 +183,9 @@ const AwardsList = ({ awards, loading }) => {
                     <span className="font-medium">{award.agency || award.awarding_agency}</span>
                     {(award.subagency || award.awarding_subagency) && <span>{award.subagency || award.awarding_subagency}</span>}
                     <span>Awarded: {formatDate(award.award_date)}</span>
-                    {(award.contract_id || award.award_id) && (
+                    {(award.piid || award.contract_id || award.award_id) && (
                       <span className="font-mono bg-gray-100 px-2 py-1 rounded">
-                        {award.contract_id || award.award_id}
+                        {award.piid || award.contract_id || award.award_id}
                       </span>
                     )}
                   </div>
@@ -272,7 +262,7 @@ Vendor: ${award.vendor_name || award.recipient_name}
 Agency: ${award.agency || award.awarding_agency}
 Award Date: ${formatDate(award.award_date)}
 Award Amount: ${formatCurrency(award.award_amount)}
-Contract ID: ${award.contract_id || award.award_id}
+Contract ID: ${award.piid || award.contract_id || award.award_id}
 NAICS: ${award.naics_code} - ${award.naics_description || 'N/A'}
 PSC: ${award.psc_code} - ${award.psc_description || 'N/A'}
 Set-Aside: ${award.set_aside_type || award.set_aside || 'N/A'}
@@ -284,7 +274,7 @@ Performance Location: ${award.place_of_performance || `${award.place_of_performa
                       const url = URL.createObjectURL(blob);
                       const link = document.createElement('a');
                       link.href = url;
-                      link.download = `award-${award.contract_id || award.award_id}.txt`;
+                      link.download = `award-${award.piid || award.contract_id || award.award_id}.txt`;
                       link.click();
                     }}
                     className="border border-gray-300 text-gray-700 px-3 py-1 rounded text-sm hover:bg-gray-50 transition-colors"
@@ -305,7 +295,7 @@ Performance Location: ${award.place_of_performance || `${award.place_of_performa
                         <div className="space-y-2 text-sm">
                           <div className="flex justify-between">
                             <span className="text-gray-600">Contract ID:</span>
-                            <span className="font-mono">{award.contract_id || award.award_id}</span>
+                            <span className="font-mono">{award.piid || award.contract_id || award.award_id}</span>
                           </div>
                           
                           {award.start_date && (
@@ -425,7 +415,7 @@ Performance Location: ${award.place_of_performance || `${award.place_of_performa
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-8 flex flex-col items-center">
             <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-green-600 mb-4"></div>
-            <p className="text-gray-600">Loading contract modifications...</p>
+            <p className="text-gray-600">Loading contract transaction history from USASpending.gov...</p>
           </div>
         </div>
       )}
