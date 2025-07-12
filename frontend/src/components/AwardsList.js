@@ -1,10 +1,15 @@
 // frontend/src/components/AwardsList.js
 import React, { useState } from 'react';
+import ContractAnalysis from './ContractAnalysis';
+import { getContractMods } from '../services/api';
 
 const AwardsList = ({ awards, loading }) => {
   const [sortBy, setSortBy] = useState('award_date');
   const [sortOrder, setSortOrder] = useState('desc');
   const [expandedAwards, setExpandedAwards] = useState(new Set());
+  const [selectedContract, setSelectedContract] = useState(null);
+  const [contractMods, setContractMods] = useState(null);
+  const [loadingMods, setLoadingMods] = useState(false);
 
   if (loading) {
     return (
@@ -73,6 +78,48 @@ const AwardsList = ({ awards, loading }) => {
       newExpanded.add(awardId);
     }
     setExpandedAwards(newExpanded);
+  };
+
+  const handleAnalyzeContract = async (award) => {
+    setLoadingMods(true);
+    setSelectedContract(award);
+    
+    try {
+      // For now, use mock data for mods
+      // In production, this would call the API: const mods = await getContractMods(award.contract_id || award.award_id);
+      const mockMods = [
+        {
+          mod_number: 'P00001',
+          award_date: new Date(new Date(award.award_date).getTime() + 90 * 24 * 60 * 60 * 1000).toISOString(),
+          award_amount: award.award_amount * 0.2,
+          description: 'Scope expansion for additional services'
+        },
+        {
+          mod_number: 'P00002',
+          award_date: new Date(new Date(award.award_date).getTime() + 180 * 24 * 60 * 60 * 1000).toISOString(),
+          award_amount: award.award_amount * 0.15,
+          description: 'Exercise of Option Year 1'
+        },
+        {
+          mod_number: 'P00003',
+          award_date: new Date(new Date(award.award_date).getTime() + 365 * 24 * 60 * 60 * 1000).toISOString(),
+          award_amount: award.award_amount * 0.3,
+          description: 'Exercise of Option Year 2 with additional requirements'
+        }
+      ];
+      
+      setContractMods(mockMods);
+    } catch (error) {
+      console.error('Error loading contract mods:', error);
+      setContractMods([]);
+    } finally {
+      setLoadingMods(false);
+    }
+  };
+
+  const handleCloseAnalysis = () => {
+    setSelectedContract(null);
+    setContractMods(null);
   };
 
   const sortedAwards = sortAwards(awards);
@@ -210,8 +257,11 @@ const AwardsList = ({ awards, loading }) => {
                 </button>
                 
                 <div className="flex gap-2">
-                  <button className="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700 transition-colors">
-                    Analyze Vendor
+                  <button 
+                    onClick={() => handleAnalyzeContract(award)}
+                    className="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700 transition-colors"
+                  >
+                    Analyze Contract
                   </button>
                   <button 
                     onClick={() => {
@@ -360,6 +410,25 @@ Performance Location: ${award.place_of_performance || `${award.place_of_performa
           );
         })}
       </div>
+      
+      {/* Contract Analysis Modal */}
+      {selectedContract && contractMods !== null && !loadingMods && (
+        <ContractAnalysis 
+          contract={selectedContract} 
+          mods={contractMods} 
+          onClose={handleCloseAnalysis}
+        />
+      )}
+      
+      {/* Loading Modal */}
+      {loadingMods && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-8 flex flex-col items-center">
+            <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-green-600 mb-4"></div>
+            <p className="text-gray-600">Loading contract modifications...</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
