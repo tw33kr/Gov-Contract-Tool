@@ -5,6 +5,62 @@ All notable changes to the Federal Contract Research Tool will be documented in 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2025-01-24] - 15:30 UTC
+
+### Fixed - Awards Search Show More/Show Less Individual Item Toggle
+
+**Developer**: Claude (Anthropic)  
+**Fix Type**: UI INTERACTION FIX  
+**Issue Resolved**: Show More/Show Less button was affecting all search results instead of individual items
+
+#### 🎯 Problem Solved
+User reported that clicking the "Show More Details" or "Show Less" button on any contract award item would expand or collapse all items in the list simultaneously, making it impossible to view details for specific awards without expanding all of them.
+
+#### 🚀 Implementation Details
+
+**Key Changes**:
+- Changed from single `expandedAward` state variable to `expandedAwards` Set to track multiple expanded items
+- Implemented `toggleExpanded` function that adds/removes individual contract IDs from the Set
+- Updated expansion check to use `expandedAwards.has(award.contract_id)` instead of direct comparison
+
+**Technical Implementation**:
+
+```javascript
+// Before: Single state variable affected all items
+const [expandedAward, setExpandedAward] = useState(null);
+
+// After: Set tracks individual expanded items
+const [expandedAwards, setExpandedAwards] = useState(new Set());
+
+// Toggle function for individual items
+const toggleExpanded = (contractId) => {
+  const newExpanded = new Set(expandedAwards);
+  if (newExpanded.has(contractId)) {
+    newExpanded.delete(contractId);
+  } else {
+    newExpanded.add(contractId);
+  }
+  setExpandedAwards(newExpanded);
+};
+```
+
+#### 📊 User Experience Improvements
+
+**Before**:
+- Clicking any Show More button expanded all award items
+- Impossible to view details for just one award
+- Poor user experience when browsing multiple awards
+
+**After**:
+- ✅ Each award item expands/collapses independently
+- ✅ Multiple items can be expanded simultaneously
+- ✅ State persists while browsing the list
+- ✅ Intuitive interaction pattern matching user expectations
+
+This fix ensures users can efficiently browse contract awards and view details for specific items of interest without affecting the entire list display.
+
+---
+
 ## [2025-01-20] - 23:15 UTC
 
 ### Fixed - Contracts Ending Soon Filter Clarification
