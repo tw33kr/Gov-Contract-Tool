@@ -204,6 +204,55 @@ async def search_contracts_post(request: SearchRequest):
             has_more=False
         )
 
+@router.get("/contract/{contract_id}/transactions")
+async def get_contract_transactions(contract_id: str):
+    """
+    Get detailed transaction history for a specific contract
+    
+    This endpoint retrieves all modifications and transactions for a contract
+    from USASpending.gov, providing the complete history needed for analysis.
+    """
+    try:
+        logger.info(f"📊 Getting transaction history for contract: {contract_id}")
+        
+        from app.services.fpds import FPDSService
+        fpds_service = FPDSService()
+        
+        # Get transactions from USASpending API
+        transactions = fpds_service.get_contract_transactions(contract_id)
+        
+        if not transactions:
+            logger.warning(f"⚠️ No transactions found for contract: {contract_id}")
+            return {
+                "contract_id": contract_id,
+                "transactions": [],
+                "total_modifications": 0,
+                "message": "No transaction history found for this contract ID"
+            }
+        
+        # Sort transactions by date
+        transactions.sort(key=lambda x: x.get('award_date', ''))
+        
+        # Calculate summary statistics
+        total_value = max([t.get('total_value', 0) for t in transactions] or [0])
+        total_obligations = sum([t.get('award_amount', 0) for t in transactions if t.get('award_amount', 0) > 0])
+        
+        return {
+            "contract_id": contract_id,
+            "transactions": transactions,
+            "total_modifications": len(transactions),
+            "summary": {
+                "total_contract_value": total_value,
+                "total_obligations": total_obligations,
+                "modification_count": len([t for t in transactions if t['mod_number'] != 'BASE']),
+                "base_award": next((t for t in transactions if t['mod_number'] == 'BASE'), None)
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error getting contract transactions: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving contract transactions: {str(e)}")
+
 @router.get("/agencies")
 async def get_agencies():
     """
