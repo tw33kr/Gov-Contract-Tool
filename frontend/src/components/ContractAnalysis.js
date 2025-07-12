@@ -10,15 +10,28 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
   const [timelineData, setTimelineData] = useState(null);
 
   const analyzeContract = useCallback(() => {
+    // Ensure we have valid dates
+    const contractStartDate = contract.start_date || contract.award_date;
+    const contractEndDate = contract.end_date || new Date().toISOString();
+    
+    if (!contractStartDate) {
+      console.error('Contract has no start date or award date');
+      return;
+    }
+
     // Combine base contract and mods
     const combinedMods = [
       {
         mod_number: 'BASE',
-        award_date: contract.award_date,
-        award_amount: contract.award_amount,
+        award_date: contract.award_date || contractStartDate,
+        award_amount: contract.award_amount || 0,
         description: 'Base Contract Award'
       },
-      ...mods
+      ...mods.map(mod => ({
+        ...mod,
+        award_date: mod.award_date || contractStartDate,
+        award_amount: mod.award_amount || 0
+      }))
     ];
 
     // Sort by date
@@ -26,8 +39,8 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
     setAllMods(combinedMods);
 
     // Get contract date range
-    const startDate = parseISO(contract.start_date || contract.award_date);
-    const endDate = contract.end_date ? parseISO(contract.end_date) : new Date();
+    const startDate = parseISO(contractStartDate);
+    const endDate = parseISO(contractEndDate);
 
     // Analyze by calendar year
     const calendarYearData = analyzeByCalendarYear(combinedMods, startDate, endDate);
@@ -90,13 +103,19 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
     performanceData.forEach((periodData) => {
       if (periodData.totalAmount > 0) {
         // Parse the end date from the period string
-        const periodEndStr = periodData.period.split(' - ')[1];
-        const endDate = parseISO(periodEndStr);
-        timeline.performanceMarkers.push({
-          date: endDate,
-          label: periodData.year,
-          amount: periodData.totalAmount
-        });
+        const periodParts = periodData.period.split(' - ');
+        if (periodParts.length === 2) {
+          try {
+            const endDate = parseISO(periodParts[1]);
+            timeline.performanceMarkers.push({
+              date: endDate,
+              label: periodData.year,
+              amount: periodData.totalAmount
+            });
+          } catch (error) {
+            console.error('Error parsing performance period end date:', periodParts[1]);
+          }
+        }
       }
     });
 
@@ -113,8 +132,14 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
       const yearEnd = endOfYear(new Date(year, 0, 1));
       
       const yearMods = mods.filter(mod => {
-        const modDate = parseISO(mod.award_date);
-        return isWithinInterval(modDate, { start: yearStart, end: yearEnd });
+        if (!mod.award_date) return false;
+        try {
+          const modDate = parseISO(mod.award_date);
+          return isWithinInterval(modDate, { start: yearStart, end: yearEnd });
+        } catch (error) {
+          console.error('Error parsing mod date:', mod.award_date);
+          return false;
+        }
       });
 
       const totalAmount = yearMods.reduce((sum, mod) => sum + (mod.award_amount || 0), 0);
@@ -148,8 +173,14 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
       const fyEnd = new Date(fy, 8, 30, 23, 59, 59); // September 30th
       
       const yearMods = mods.filter(mod => {
-        const modDate = parseISO(mod.award_date);
-        return isWithinInterval(modDate, { start: fyStart, end: fyEnd });
+        if (!mod.award_date) return false;
+        try {
+          const modDate = parseISO(mod.award_date);
+          return isWithinInterval(modDate, { start: fyStart, end: fyEnd });
+        } catch (error) {
+          console.error('Error parsing mod date:', mod.award_date);
+          return false;
+        }
       });
 
       const totalAmount = yearMods.reduce((sum, mod) => sum + (mod.award_amount || 0), 0);
@@ -181,8 +212,14 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
       // Create a closure to capture the current values
       const filterMods = (start, end) => {
         return mods.filter(mod => {
-          const modDate = parseISO(mod.award_date);
-          return isWithinInterval(modDate, { start, end });
+          if (!mod.award_date) return false;
+          try {
+            const modDate = parseISO(mod.award_date);
+            return isWithinInterval(modDate, { start, end });
+          } catch (error) {
+            console.error('Error parsing mod date:', mod.award_date);
+            return false;
+          }
         });
       };
       
@@ -235,7 +272,7 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
     const plotHeight = chartHeight - padding.top - padding.bottom;
 
     // Time scale
-    const totalDays = differenceInDays(endDate, startDate);
+    const totalDays = differenceInDays(endDate, startDate) || 1; // Prevent division by zero
     const getXPosition = (date) => {
       const days = differenceInDays(date, startDate);
       return padding.left + (days / totalDays) * plotWidth;
@@ -268,28 +305,34 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
 
             {/* Plot modifications */}
             {mods.map((mod, idx) => {
-              const modDate = parseISO(mod.award_date);
-              const x = getXPosition(modDate);
-              const y = chartHeight - padding.bottom - ((mod.award_amount || 0) / maxAmount) * plotHeight;
-              
-              return (
-                <g key={idx}>
-                  {/* Vertical line to baseline */}
-                  <line x1={x} y1={chartHeight - padding.bottom} x2={x} y2={y} stroke="#6b7280" strokeWidth="1" opacity="0.3" />
-                  
-                  {/* Mod point */}
-                  <circle cx={x} cy={y} r="5" fill="#6b7280" stroke="white" strokeWidth="2">
-                    <title>{`${mod.mod_number}: ${formatCurrency(mod.award_amount)} on ${format(modDate, 'MMM dd, yyyy')}`}</title>
-                  </circle>
-                  
-                  {/* Mod label for significant amounts */}
-                  {mod.award_amount > maxAmount * 0.15 && (
-                    <text x={x} y={y - 8} textAnchor="middle" className="text-xs font-medium fill-gray-700">
-                      {mod.mod_number}
-                    </text>
-                  )}
-                </g>
-              );
+              if (!mod.award_date) return null;
+              try {
+                const modDate = parseISO(mod.award_date);
+                const x = getXPosition(modDate);
+                const y = chartHeight - padding.bottom - ((mod.award_amount || 0) / maxAmount) * plotHeight;
+                
+                return (
+                  <g key={idx}>
+                    {/* Vertical line to baseline */}
+                    <line x1={x} y1={chartHeight - padding.bottom} x2={x} y2={y} stroke="#6b7280" strokeWidth="1" opacity="0.3" />
+                    
+                    {/* Mod point */}
+                    <circle cx={x} cy={y} r="5" fill="#6b7280" stroke="white" strokeWidth="2">
+                      <title>{`${mod.mod_number}: ${formatCurrency(mod.award_amount)} on ${format(modDate, 'MMM dd, yyyy')}`}</title>
+                    </circle>
+                    
+                    {/* Mod label for significant amounts */}
+                    {mod.award_amount > maxAmount * 0.15 && (
+                      <text x={x} y={y - 8} textAnchor="middle" className="text-xs font-medium fill-gray-700">
+                        {mod.mod_number}
+                      </text>
+                    )}
+                  </g>
+                );
+              } catch (error) {
+                console.error('Error parsing mod date for chart:', mod.award_date);
+                return null;
+              }
             })}
 
             {/* Calendar Year Markers */}
@@ -426,6 +469,17 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
     </div>
   );
 
+  // Show loading or error state if no data
+  if (!contract) {
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        <div className="bg-white rounded-lg p-8">
+          <p className="text-gray-600">No contract data available</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-lg shadow-xl max-w-7xl w-full max-h-[90vh] overflow-hidden">
@@ -470,7 +524,7 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
                   <div>
                     <span className="font-medium">{mod.mod_number}</span>
                     <span className="text-sm text-gray-600 ml-2">
-                      {format(parseISO(mod.award_date), 'MMM dd, yyyy')}
+                      {mod.award_date ? format(parseISO(mod.award_date), 'MMM dd, yyyy') : 'No date'}
                     </span>
                     {mod.description && (
                       <span className="text-sm text-gray-500 ml-2">- {mod.description}</span>
