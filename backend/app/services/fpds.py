@@ -15,9 +15,11 @@ logger = logging.getLogger(__name__)
 class FPDSService:
     def __init__(self, database_path: str = "contracts.db"):
         self.database_path = database_path
-        # Use the correct USASpending.gov endpoint
+        # Use the correct USASpending.gov endpoints
         self.base_url = "https://api.usaspending.gov/api/v2/search/spending_by_award"
         self.transaction_url = "https://api.usaspending.gov/api/v2/search/spending_by_transaction"
+        # New endpoint for award details
+        self.award_url = "https://api.usaspending.gov/api/v2/awards/"
         self.init_database()
     
     def init_database(self):
@@ -246,37 +248,41 @@ class FPDSService:
         logger.info(f"📊 Fetching transaction history for contract: {contract_id}")
         
         try:
-            # Build payload for transaction search
+            # USASpending requires PIIDs to be in a specific format for the API
+            # Try different approaches to find the transactions
+            
+            # First, try using the spending_by_transaction endpoint with PIID filter
             payload = {
                 "filters": {
-                    "award_ids": [contract_id],
-                    "award_type_codes": ["A", "B", "C", "D"],  # Contract types
+                    "award_type_codes": ["A", "B", "C", "D", "E"],  # All contract types
                     "time_period": [{
                         "start_date": "2010-01-01",
                         "end_date": datetime.now().strftime("%Y-%m-%d")
-                    }]
+                    }],
+                    "keywords": [contract_id]  # Use keywords to search for PIID
                 },
                 "fields": [
-                    "Award ID",
-                    "Modification Number",
-                    "Transaction Description",
-                    "Action Date",
-                    "Federal Action Obligation",
-                    "Total Dollars Obligated",
-                    "Current Total Value of Award",
-                    "Awarding Agency",
-                    "Awarding Sub Agency",
-                    "Recipient Name",
-                    "Action Type",
-                    "Award Type"
+                    "piid",
+                    "modification_number",
+                    "description",
+                    "action_date",
+                    "federal_action_obligation",
+                    "total_obligated_amount",
+                    "current_total_value_of_award",
+                    "awarding_agency_name",
+                    "awarding_sub_agency_name",
+                    "recipient_name",
+                    "action_type_description",
+                    "award_type"
                 ],
                 "page": 1,
                 "limit": 100,
-                "sort": "Action Date",
+                "sort": "action_date",
                 "order": "asc"
             }
             
             logger.info(f"📡 USASpending.gov Transaction API request")
+            logger.info(f"📋 Payload: {json.dumps(payload, indent=2)}")
             
             # Make the API request
             response = requests.post(
@@ -303,21 +309,118 @@ class FPDSService:
                 
                 logger.info(f"✅ Successfully fetched {len(transactions_data)} transactions")
                 
+                # Filter transactions to only those matching the PIID
+                filtered_transactions = []
+                for tx in transactions_data:
+                    tx_piid = tx.get('piid', '').upper()
+                    if contract_id.upper() in tx_piid or tx_piid in contract_id.upper():
+                        filtered_transactions.append(tx)
+                
+                logger.info(f"🎯 Filtered to {len(filtered_transactions)} transactions matching PIID")
+                
                 # Process transactions
                 processed_transactions = []
-                for transaction in transactions_data:
+                for transaction in filtered_transactions:
                     processed_tx = self._process_transaction_data(transaction)
                     if processed_tx:
                         processed_transactions.append(processed_tx)
+                
+                # If no transactions found, try alternative approach
+                if not processed_transactions:
+                    logger.warning(f"⚠️ No transactions found, trying alternative search")
+                    processed_transactions = self._search_transactions_alternative(contract_id)
                 
                 return processed_transactions
                 
             else:
                 logger.error(f"❌ Transaction API error: {response.status_code}")
-                return []
+                logger.error(f"Response: {response.text[:500]}")
+                return self._search_transactions_alternative(contract_id)
                 
         except Exception as e:
             logger.error(f"❌ Error fetching transactions: {str(e)}")
+            return []
+    
+    def _search_transactions_alternative(self, contract_id: str) -> List[Dict[str, Any]]:
+        """Alternative method to search for transactions using the award search endpoint"""
+        try:
+            logger.info(f"🔄 Trying alternative transaction search for {contract_id}")
+            
+            # Use the spending_by_award endpoint to find the award first
+            payload = {
+                "filters": {
+                    "award_type_codes": ["A", "B", "C", "D", "E"],
+                    "time_period": [{
+                        "start_date": "2010-01-01",
+                        "end_date": datetime.now().strftime("%Y-%m-%d")
+                    }]
+                },
+                "fields": [
+                    "Award ID",
+                    "piid",
+                    "Recipient Name",
+                    "Start Date",
+                    "End Date",
+                    "Award Amount",
+                    "Total Outlays",
+                    "Description",
+                    "def_codes",
+                    "COVID-19 Obligations",
+                    "COVID-19 Outlays",
+                    "Infrastructure Obligations",
+                    "Infrastructure Outlays",
+                    "Awarding Agency",
+                    "Awarding Sub Agency",
+                    "Contract Award Type",
+                    "recipient_id",
+                    "prime_award_recipient_id"
+                ],
+                "keywords": [contract_id],
+                "limit": 10,
+                "page": 1
+            }
+            
+            response = requests.post(
+                self.base_url,
+                json=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": "Federal-Contract-Research-Tool/1.0"
+                },
+                timeout=60
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                awards = data.get('results', [])
+                
+                if awards:
+                    # For now, create a base transaction from the award data
+                    # In a full implementation, we would use the award details endpoint
+                    transactions = []
+                    for award in awards:
+                        if contract_id.upper() in str(award.get('piid', '')).upper():
+                            # Create base transaction
+                            base_tx = {
+                                "mod_number": "BASE",
+                                "award_date": award.get("Start Date"),
+                                "award_amount": award.get("Award Amount", 0),
+                                "total_value": award.get("Award Amount", 0),
+                                "description": award.get("Description", "Base Award"),
+                                "action_type": "Base Award",
+                                "awarding_agency": award.get("Awarding Agency"),
+                                "recipient_name": award.get("Recipient Name")
+                            }
+                            transactions.append(base_tx)
+                            logger.info(f"✅ Created base transaction from award data")
+                            break
+                    
+                    return transactions
+            
+            return []
+            
+        except Exception as e:
+            logger.error(f"❌ Alternative search failed: {str(e)}")
             return []
     
     def _process_transaction_data(self, transaction: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -325,25 +428,31 @@ class FPDSService:
         try:
             # Extract modification number
             mod_number = (
-                transaction.get("Modification Number") or 
                 transaction.get("modification_number") or 
-                "BASE"
+                transaction.get("Modification Number") or 
+                "0"
             )
+            
+            # Convert modification number to expected format
+            if mod_number == "0" or mod_number == "00" or mod_number == "":
+                mod_number = "BASE"
+            else:
+                mod_number = f"P{mod_number.zfill(5)}"
             
             # Extract action date
             action_date = self._parse_date(
-                transaction.get("Action Date") or 
-                transaction.get("action_date")
+                transaction.get("action_date") or 
+                transaction.get("Action Date")
             )
             
             # Extract obligation amount
             obligation = None
             for amount_field in [
-                "Federal Action Obligation",
                 "federal_action_obligation",
+                "Federal Action Obligation",
                 "Action Obligation"
             ]:
-                if transaction.get(amount_field):
+                if transaction.get(amount_field) is not None:
                     try:
                         obligation = float(transaction[amount_field])
                         break
@@ -353,12 +462,12 @@ class FPDSService:
             # Extract total value
             total_value = None
             for value_field in [
-                "Current Total Value of Award",
                 "current_total_value_of_award",
-                "Total Dollars Obligated",
-                "total_dollars_obligated"
+                "Current Total Value of Award",
+                "total_obligated_amount",
+                "Total Obligated Amount"
             ]:
-                if transaction.get(value_field):
+                if transaction.get(value_field) is not None:
                     try:
                         total_value = float(transaction[value_field])
                         break
@@ -366,14 +475,16 @@ class FPDSService:
                         continue
             
             description = (
-                transaction.get("Transaction Description") or 
-                transaction.get("transaction_description") or 
-                transaction.get("Description") or
+                transaction.get("description") or 
+                transaction.get("Description") or 
+                transaction.get("action_type_description") or
+                transaction.get("Transaction Description") or
                 "No description available"
             )
             
             action_type = (
-                transaction.get("Action Type") or 
+                transaction.get("action_type_description") or 
+                transaction.get("Action Type") or
                 transaction.get("action_type") or
                 "Unknown"
             )
@@ -385,12 +496,13 @@ class FPDSService:
                 "total_value": total_value,
                 "description": description,
                 "action_type": action_type,
-                "awarding_agency": transaction.get("Awarding Agency") or transaction.get("awarding_agency"),
-                "recipient_name": transaction.get("Recipient Name") or transaction.get("recipient_name")
+                "awarding_agency": transaction.get("awarding_agency_name") or transaction.get("Awarding Agency"),
+                "recipient_name": transaction.get("recipient_name") or transaction.get("Recipient Name")
             }
             
         except Exception as e:
             logger.error(f"❌ Error processing transaction data: {str(e)}")
+            logger.error(f"Transaction data: {json.dumps(transaction, indent=2)[:500]}")
             return None
     
     def _build_payload(self, keywords: Optional[str], awarding_agency: Optional[str], 
@@ -407,8 +519,10 @@ class FPDSService:
             "filters": filters,
             "fields": [
                 "Award ID",
+                "piid",
                 "Recipient Name", 
                 "Award Amount",
+                "Total Outlays",
                 "Start Date",
                 "End Date",
                 "Awarding Agency",
@@ -416,7 +530,11 @@ class FPDSService:
                 "Award Type",
                 "Description",
                 "generated_internal_id",
-                "piid"
+                "def_codes",
+                "COVID-19 Obligations",
+                "COVID-19 Outlays",
+                "Infrastructure Obligations",
+                "Infrastructure Outlays"
             ],
             "page": 1,
             "limit": min(limit, 100),  # USASpending API limits
@@ -424,7 +542,7 @@ class FPDSService:
             "order": "desc"
         }
         
-        # ALWAYS use keywords for contract numbers since that's what works on the website
+        # Use keywords for searching, including contract numbers
         if keywords and keywords.strip() and keywords.lower() not in ['none', '']:
             payload["keywords"] = [keywords.strip()]
             logger.info(f"🔍 Using keywords parameter: {keywords}")
@@ -475,8 +593,8 @@ class FPDSService:
             }]
             logger.info("📅 Using default time period: last 2 years")
         
-        # Always include contract award types (A, B, C, D are contract types)
-        filters["award_type_codes"] = ["A", "B", "C", "D"]
+        # Always include contract award types
+        filters["award_type_codes"] = ["A", "B", "C", "D", "E"]
         
         logger.info(f"🔧 Built filters: {json.dumps(filters, indent=2)}")
         return filters
@@ -492,16 +610,16 @@ class FPDSService:
                 self._logged_structure = True
             
             # Handle different possible field names and structures from the API
-            award_id = (
+            # Extract PIID first as it's the most important
+            piid = (
+                award.get("piid") or 
+                award.get("PIID") or 
                 award.get("Award ID") or 
-                award.get("award_id") or 
-                award.get("generated_internal_id") or 
-                award.get("piid") or
-                f"award-{id(award)}"
+                award.get("award_id") or
+                ""
             )
             
-            # Store PIID separately for transaction lookups
-            piid = award.get("piid") or award.get("Award ID") or award.get("award_id", "")
+            award_id = piid or award.get("generated_internal_id") or f"award-{id(award)}"
             
             recipient_name = (
                 award.get("Recipient Name") or 
@@ -531,7 +649,7 @@ class FPDSService:
                 "Award Amount", "award_amount", "Total Award Amount", 
                 "total_award_amount", "Current Award Amount", "current_award_amount"
             ]:
-                if award.get(amount_field):
+                if award.get(amount_field) is not None:
                     try:
                         award_amount = float(award[amount_field])
                         break
