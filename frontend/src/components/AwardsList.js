@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 const AwardsList = ({ awards, loading }) => {
   const [sortBy, setSortBy] = useState('award_date');
   const [sortOrder, setSortOrder] = useState('desc');
-  const [expandedAward, setExpandedAward] = useState(null);
+  const [expandedAwards, setExpandedAwards] = useState(new Set());
 
   if (loading) {
     return (
@@ -65,6 +65,16 @@ const AwardsList = ({ awards, loading }) => {
     }
   };
 
+  const toggleExpanded = (contractId) => {
+    const newExpanded = new Set(expandedAwards);
+    if (newExpanded.has(contractId)) {
+      newExpanded.delete(contractId);
+    } else {
+      newExpanded.add(contractId);
+    }
+    setExpandedAwards(newExpanded);
+  };
+
   const sortedAwards = sortAwards(awards);
 
   const formatCurrency = (amount) => {
@@ -119,7 +129,7 @@ const AwardsList = ({ awards, loading }) => {
       {/* Awards Cards */}
       <div className="divide-y divide-gray-200">
         {sortedAwards.map((award) => {
-          const isExpanded = expandedAward === award.contract_id;
+          const isExpanded = expandedAwards.has(award.contract_id);
           
           return (
             <div key={award.contract_id} className="p-6 hover:bg-gray-50 transition-colors">
@@ -191,7 +201,7 @@ const AwardsList = ({ awards, loading }) => {
               {/* Action Buttons */}
               <div className="flex justify-between items-center">
                 <button
-                  onClick={() => setExpandedAward(isExpanded ? null : award.contract_id)}
+                  onClick={() => toggleExpanded(award.contract_id)}
                   className="text-green-600 hover:text-green-800 font-medium text-sm"
                 >
                   {isExpanded ? 'Show Less' : 'Show More Details'}
