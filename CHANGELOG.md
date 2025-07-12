@@ -5,6 +5,65 @@ All notable changes to the Federal Contract Research Tool will be documented in 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2025-01-24] - 15:45 UTC
+
+### Fixed - Awards Search Identifier Field Mismatch for Show More/Show Less
+
+**Developer**: Claude (Anthropic)  
+**Fix Type**: DATA MODEL COMPATIBILITY FIX  
+**Issue Resolved**: Show More/Show Less functionality failed due to mismatch between backend model fields and frontend expectations
+
+#### 🎯 Problem Solved
+User reported that the Show More/Show Less functionality was not working. Investigation revealed that the backend `AwardedContract` model uses `award_id` as the identifier field, while the frontend code was expecting `contract_id`. This mismatch caused the toggle functionality to fail silently, as the Set operations were using undefined values.
+
+#### 🚀 Implementation Details
+
+**Root Cause**:
+- Backend model defines: `award_id: str` as the unique identifier
+- Frontend was using: `award.contract_id` which was undefined
+- The Set was storing `undefined` values, breaking the toggle logic
+
+**Key Changes**:
+- Updated identifier logic to handle both `award_id` and `contract_id` fields
+- Added fallback to array index if neither field exists
+- Updated all references throughout the component to use the flexible identifier
+- Made the component compatible with different data sources
+
+**Technical Implementation**:
+
+```javascript
+// Flexible identifier handling
+const awardIdentifier = award.award_id || award.contract_id || `award-${index}`;
+const isExpanded = expandedAwards.has(awardIdentifier);
+
+// Updated toggle function call
+onClick={() => toggleExpanded(awardIdentifier)}
+
+// Handle different field names throughout
+<span>{award.vendor_name || award.recipient_name}</span>
+<span>{award.agency || award.awarding_agency}</span>
+```
+
+#### 📊 Data Model Compatibility
+
+**Backend Fields Mapped**:
+- `award_id` → Primary identifier
+- `recipient_name` → `vendor_name` fallback
+- `awarding_agency` → `agency` fallback
+- `awarding_subagency` → `subagency` fallback
+- `award_type` → `contract_type` fallback
+- `set_aside` → `set_aside_type` fallback
+
+**Frontend Now Handles**:
+- ✅ Both SAM.gov and USASpending.gov data formats
+- ✅ Different field naming conventions
+- ✅ Missing or undefined identifiers
+- ✅ Graceful fallbacks for all display fields
+
+This fix ensures the Awards Search component works correctly regardless of the data source or field naming conventions used by different government APIs.
+
+---
+
 ## [2025-01-24] - 15:30 UTC
 
 ### Fixed - Awards Search Show More/Show Less Individual Item Toggle
