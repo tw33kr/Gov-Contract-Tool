@@ -238,63 +238,82 @@ class FPDSService:
         """Try alternative search methods for contract numbers"""
         logger.info(f"🔄 Trying alternative search for contract number: {contract_number}")
         
-        # Try searching with the contract number as a keyword
-        try:
-            payload = {
-                "filters": {
-                    "award_type_codes": ["A", "B", "C", "D"],
-                    "time_period": [{
-                        "start_date": "2020-01-01",  # Broader date range
-                        "end_date": datetime.now().strftime("%Y-%m-%d")
-                    }]
-                },
-                "keywords": [contract_number],  # Search as keyword instead
-                "fields": [
-                    "Award ID",
-                    "Recipient Name", 
-                    "Award Amount",
-                    "Start Date",
-                    "End Date",
-                    "Awarding Agency",
-                    "Award Type",
-                    "Description",
-                    "generated_internal_id",
-                    "piid"
-                ],
-                "page": 1,
-                "limit": min(limit, 100),
-                "sort": "Award Amount",
-                "order": "desc"
-            }
+        # Try different variations of the contract number
+        variations = [
+            contract_number,  # Original
+            contract_number.upper(),  # Uppercase
+            contract_number.replace("-", ""),  # Without dashes
+            contract_number.replace(" ", ""),  # Without spaces
+        ]
+        
+        for variation in variations:
+            logger.info(f"🔍 Trying variation: {variation}")
             
-            response = requests.post(
-                self.base_url,
-                json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "User-Agent": "Federal-Contract-Research-Tool/1.0"
-                },
-                timeout=30
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                awards_data = data.get('results', data.get('data', []))
-                logger.info(f"✅ Alternative search returned {len(awards_data)} awards")
+            # Try searching with the contract number as a keyword
+            try:
+                payload = {
+                    "filters": {
+                        "award_type_codes": ["A", "B", "C", "D"],
+                        "time_period": [{
+                            "start_date": "2020-01-01",  # Broader date range
+                            "end_date": datetime.now().strftime("%Y-%m-%d")
+                        }]
+                    },
+                    "keywords": [variation],  # Search as keyword
+                    "fields": [
+                        "Award ID",
+                        "Recipient Name", 
+                        "Award Amount",
+                        "Start Date",
+                        "End Date",
+                        "Awarding Agency",
+                        "Award Type",
+                        "Description",
+                        "generated_internal_id",
+                        "piid"
+                    ],
+                    "page": 1,
+                    "limit": min(limit, 100),
+                    "sort": "Award Amount",
+                    "order": "desc"
+                }
                 
-                processed_awards = []
-                for award in awards_data:
-                    processed_award = self._process_award_data(award)
-                    if processed_award:
-                        # Check if the award ID matches our search
-                        award_id = processed_award.get('award_id', '').upper()
-                        if contract_number.upper() in award_id or award_id in contract_number.upper():
-                            processed_awards.append(processed_award)
+                response = requests.post(
+                    self.base_url,
+                    json=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "User-Agent": "Federal-Contract-Research-Tool/1.0"
+                    },
+                    timeout=30
+                )
                 
-                return processed_awards
-            
-        except Exception as e:
-            logger.error(f"Alternative search failed: {str(e)}")
+                if response.status_code == 200:
+                    data = response.json()
+                    awards_data = data.get('results', data.get('data', []))
+                    logger.info(f"✅ Alternative search returned {len(awards_data)} awards")
+                    
+                    processed_awards = []
+                    for award in awards_data:
+                        processed_award = self._process_award_data(award)
+                        if processed_award:
+                            # Check if the award ID matches our search
+                            award_id = processed_award.get('award_id', '').upper()
+                            search_upper = contract_number.upper().replace("-", "")
+                            award_id_clean = award_id.replace("-", "")
+                            
+                            if (search_upper in award_id_clean or 
+                                award_id_clean in search_upper or
+                                contract_number.upper() in award_id or 
+                                award_id in contract_number.upper()):
+                                logger.info(f"✅ Found matching award: {award_id}")
+                                processed_awards.append(processed_award)
+                    
+                    if processed_awards:
+                        return processed_awards
+                
+            except Exception as e:
+                logger.error(f"Alternative search with variation {variation} failed: {str(e)}")
         
         return []
     
@@ -441,14 +460,42 @@ class FPDSService:
                       contract_number: Optional[str] = None) -> Dict[str, Any]:
         """
         Build the filters object according to USASpending API specification
-        FIXED: Proper agency filter format and keyword handling
+        FIXED: Proper PIID filter format with quoted values for exact match
         """
         filters = {}
         
-        # If we have a contract number, use PIID filter
+        # If we have a contract number, use PIID filter with quotes for exact match
         if contract_number:
-            filters["award_ids"] = [contract_number]
-            logger.info(f"🔍 Using PIID filter for contract number: {contract_number}")
+            # USASpending API expects quoted values for exact match
+            filters["award_ids"] = [f'"{contract_number}"']
+            logger.info(f"🔍 Using PIID filter for contract number with quotes: \"{contract_number}\"")
+            
+            # Also try without time period restriction for contract number searches
+            # This helps find older contracts
+            filters["time_period"] = [{
+                "start_date": "2010-01-01",  # Go back further for contract searches
+                "end_date": datetime.now().strftime("%Y-%m-%d")
+            }]
+        else:
+            # Add time period filter for regular searches
+            if award_date_from or award_date_to:
+                if not award_date_from:
+                    award_date_from = "2024-01-01"  # Extended range for better results
+                if not award_date_to:
+                    award_date_to = datetime.now().strftime("%Y-%m-%d")
+                
+                filters["time_period"] = [{
+                    "start_date": award_date_from,
+                    "end_date": award_date_to
+                }]
+                logger.info(f"📅 Adding time period filter: {award_date_from} to {award_date_to}")
+            else:
+                # Default to last 6 months for non-contract searches
+                filters["time_period"] = [{
+                    "start_date": "2024-01-01", 
+                    "end_date": datetime.now().strftime("%Y-%m-%d")
+                }]
+                logger.info("📅 Using default time period: last 6 months")
         
         # Add agency filter using the correct USASpending.gov format
         if awarding_agency and awarding_agency.strip() and awarding_agency.lower() not in ['none', '']:
@@ -459,26 +506,6 @@ class FPDSService:
                 "name": awarding_agency.strip()
             }]
             logger.info(f"🏛️ Adding agency filter: {awarding_agency}")
-        
-        # Add time period filter
-        if award_date_from or award_date_to:
-            if not award_date_from:
-                award_date_from = "2024-01-01"  # Extended range for better results
-            if not award_date_to:
-                award_date_to = datetime.now().strftime("%Y-%m-%d")
-            
-            filters["time_period"] = [{
-                "start_date": award_date_from,
-                "end_date": award_date_to
-            }]
-            logger.info(f"📅 Adding time period filter: {award_date_from} to {award_date_to}")
-        else:
-            # Default to last 6 months for better results
-            filters["time_period"] = [{
-                "start_date": "2024-01-01", 
-                "end_date": datetime.now().strftime("%Y-%m-%d")
-            }]
-            logger.info("📅 Using default time period: last 6 months")
         
         # Always include contract award types (A, B, C, D are contract types)
         filters["award_type_codes"] = ["A", "B", "C", "D"]
