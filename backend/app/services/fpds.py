@@ -1,11 +1,12 @@
 import requests
 import sqlite3
 from datetime import datetime, date
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import json
 import logging
 import time
 import re
+from difflib import SequenceMatcher
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -86,6 +87,38 @@ class FPDSService:
             
         return None
     
+    def _calculate_confidence(self, search_term: str, award: Dict[str, Any]) -> float:
+        """
+        Calculate confidence score for a search result matching the search term
+        Returns a value between 0.0 and 1.0
+        """
+        award_id = str(award.get('award_id', '')).upper()
+        search_upper = search_term.upper()
+        
+        # Remove common delimiters for comparison
+        award_id_clean = award_id.replace('-', '').replace(' ', '')
+        search_clean = search_upper.replace('-', '').replace(' ', '')
+        
+        # Exact match = 100% confidence
+        if award_id == search_upper or award_id_clean == search_clean:
+            return 1.0
+        
+        # Check if one contains the other
+        if search_upper in award_id or search_clean in award_id_clean:
+            return 0.9
+        if award_id in search_upper or award_id_clean in search_clean:
+            return 0.85
+        
+        # Use sequence matching for fuzzy comparison
+        similarity = SequenceMatcher(None, search_clean, award_id_clean).ratio()
+        
+        # Also check description for contract number mentions
+        description = str(award.get('description', '')).upper()
+        if search_upper in description or search_clean in description:
+            similarity = max(similarity, 0.7)
+        
+        return similarity
+    
     def search_awards(self, 
                      keywords: Optional[str] = None,
                      awarding_agency: Optional[str] = None,
@@ -112,37 +145,22 @@ class FPDSService:
         contract_number = self._detect_contract_number(keywords)
         
         try:
-            # Build the request payload according to USASpending API specification
+            # Build the request payload
             payload = self._build_payload(keywords, awarding_agency, award_date_from, award_date_to, limit, contract_number)
             
             logger.info(f"📡 USASpending.gov API request: {self.base_url}")
             logger.info(f"📋 Request payload: {json.dumps(payload, indent=2)}")
             
-            # Make the API request with retry logic and shorter timeout
-            max_retries = 2
-            for attempt in range(max_retries):
-                try:
-                    response = requests.post(
-                        self.base_url,
-                        json=payload,
-                        headers={
-                            "Content-Type": "application/json",
-                            "User-Agent": "Federal-Contract-Research-Tool/1.0"
-                        },
-                        timeout=45  # Reduced timeout to 45 seconds
-                    )
-                    break  # If successful, break out of retry loop
-                except requests.exceptions.Timeout:
-                    if attempt < max_retries - 1:
-                        logger.warning(f"⚠️ USASpending API timeout, retrying ({attempt + 1}/{max_retries})...")
-                        time.sleep(1)  # Wait 1 second before retry
-                        continue
-                    else:
-                        logger.error("❌ USASpending API timeout after all retries")
-                        return self._get_sample_awards(keywords, awarding_agency)
-                except requests.exceptions.RequestException as e:
-                    logger.error(f"❌ USASpending API request failed: {str(e)}")
-                    return self._get_sample_awards(keywords, awarding_agency)
+            # Make the API request
+            response = requests.post(
+                self.base_url,
+                json=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": "Federal-Contract-Research-Tool/1.0"
+                },
+                timeout=60  # Increased timeout
+            )
             
             logger.info(f"📊 API Response Status: {response.status_code}")
             
@@ -165,35 +183,44 @@ class FPDSService:
                 for award in awards_data:
                     processed_award = self._process_award_data(award)
                     if processed_award:
+                        # Add confidence score if searching for contract number
+                        if contract_number:
+                            processed_award['confidence'] = self._calculate_confidence(contract_number, processed_award)
                         processed_awards.append(processed_award)
                 
-                # If no processed awards and we searched for a contract number, try alternative search
-                if not processed_awards and contract_number:
-                    logger.info("📋 No awards found with PIID search, trying alternative search methods...")
-                    return self._try_alternative_contract_search(contract_number, limit)
-                
-                # If no processed awards, return sample data
-                if not processed_awards:
-                    logger.info("📋 No awards processed, returning sample data")
-                    return self._get_sample_awards(keywords, awarding_agency)
+                # If searching for a contract number, filter and sort by confidence
+                if contract_number and processed_awards:
+                    # Sort by confidence
+                    processed_awards.sort(key=lambda x: x.get('confidence', 0), reverse=True)
+                    
+                    # If highest confidence is > 0.5, return only that result
+                    if processed_awards[0].get('confidence', 0) > 0.5:
+                        logger.info(f"🎯 High confidence match found: {processed_awards[0]['award_id']} (confidence: {processed_awards[0]['confidence']:.2f})")
+                        return [processed_awards[0]]
+                    else:
+                        logger.info(f"📋 Multiple potential matches found, returning top {min(10, len(processed_awards))} by confidence")
+                        return processed_awards[:10]  # Return top 10 by confidence
                 
                 # Cache the results
-                self._cache_awards(processed_awards)
+                if processed_awards:
+                    self._cache_awards(processed_awards)
                 
                 return processed_awards
                 
-            elif response.status_code == 400:
-                logger.error(f"❌ USASpending.gov API error 400: {response.text}")
-                # Try simplified search
-                return self._try_simplified_search(keywords, limit)
             else:
                 logger.error(f"❌ USASpending.gov API error: {response.status_code}")
-                logger.error(f"Response: {response.text}")
-                return self._get_sample_awards(keywords, awarding_agency)
+                logger.error(f"Response: {response.text[:500]}")
+                return []
                 
+        except requests.exceptions.Timeout:
+            logger.error("❌ USASpending API timeout")
+            return []
+        except requests.exceptions.RequestException as e:
+            logger.error(f"❌ USASpending API request failed: {str(e)}")
+            return []
         except Exception as e:
             logger.error(f"❌ Error fetching awards: {str(e)}")
-            return self._get_sample_awards(keywords, awarding_agency)
+            return []
     
     def _build_payload(self, keywords: Optional[str], awarding_agency: Optional[str], 
                       award_date_from: Optional[str], award_date_to: Optional[str], 
@@ -226,280 +253,23 @@ class FPDSService:
             "order": "desc"
         }
         
-        # Add keyword search if provided and not a contract number
-        if keywords and keywords.strip() and keywords.lower() not in ['none', ''] and not contract_number:
-            # USASpending.gov supports a separate "keywords" parameter for full-text search
+        # ALWAYS use keywords for contract numbers since that's what works on the website
+        if keywords and keywords.strip() and keywords.lower() not in ['none', '']:
             payload["keywords"] = [keywords.strip()]
-            logger.info(f"🔍 Added keywords parameter: {keywords}")
+            logger.info(f"🔍 Using keywords parameter: {keywords}")
         
         return payload
-    
-    def _try_alternative_contract_search(self, contract_number: str, limit: int) -> List[Dict[str, Any]]:
-        """Try alternative search methods for contract numbers"""
-        logger.info(f"🔄 Trying alternative search for contract number: {contract_number}")
-        
-        # Try different variations of the contract number
-        variations = [
-            contract_number,  # Original
-            contract_number.upper(),  # Uppercase
-            contract_number.replace("-", ""),  # Without dashes
-            contract_number.replace(" ", ""),  # Without spaces
-        ]
-        
-        for variation in variations:
-            logger.info(f"🔍 Trying variation: {variation}")
-            
-            # Try searching with the contract number as a keyword
-            try:
-                payload = {
-                    "filters": {
-                        "award_type_codes": ["A", "B", "C", "D"],
-                        "time_period": [{
-                            "start_date": "2020-01-01",  # Broader date range
-                            "end_date": datetime.now().strftime("%Y-%m-%d")
-                        }]
-                    },
-                    "keywords": [variation],  # Search as keyword
-                    "fields": [
-                        "Award ID",
-                        "Recipient Name", 
-                        "Award Amount",
-                        "Start Date",
-                        "End Date",
-                        "Awarding Agency",
-                        "Award Type",
-                        "Description",
-                        "generated_internal_id",
-                        "piid"
-                    ],
-                    "page": 1,
-                    "limit": min(limit, 100),
-                    "sort": "Award Amount",
-                    "order": "desc"
-                }
-                
-                response = requests.post(
-                    self.base_url,
-                    json=payload,
-                    headers={
-                        "Content-Type": "application/json",
-                        "User-Agent": "Federal-Contract-Research-Tool/1.0"
-                    },
-                    timeout=30
-                )
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    awards_data = data.get('results', data.get('data', []))
-                    logger.info(f"✅ Alternative search returned {len(awards_data)} awards")
-                    
-                    processed_awards = []
-                    for award in awards_data:
-                        processed_award = self._process_award_data(award)
-                        if processed_award:
-                            # Check if the award ID matches our search
-                            award_id = processed_award.get('award_id', '').upper()
-                            search_upper = contract_number.upper().replace("-", "")
-                            award_id_clean = award_id.replace("-", "")
-                            
-                            if (search_upper in award_id_clean or 
-                                award_id_clean in search_upper or
-                                contract_number.upper() in award_id or 
-                                award_id in contract_number.upper()):
-                                logger.info(f"✅ Found matching award: {award_id}")
-                                processed_awards.append(processed_award)
-                    
-                    if processed_awards:
-                        return processed_awards
-                
-            except Exception as e:
-                logger.error(f"Alternative search with variation {variation} failed: {str(e)}")
-        
-        return []
-    
-    def _try_simplified_search(self, keywords: Optional[str], limit: int) -> List[Dict[str, Any]]:
-        """Try a simplified search with minimal filters"""
-        logger.info("🔄 Trying simplified USASpending search...")
-        
-        try:
-            # Very simple payload with just basic filters
-            payload = {
-                "filters": {
-                    "award_type_codes": ["A", "B", "C", "D"],  # Contract types
-                    "time_period": [{
-                        "start_date": "2024-06-01",
-                        "end_date": "2025-07-10"
-                    }]
-                },
-                "fields": [
-                    "Award ID",
-                    "Recipient Name", 
-                    "Award Amount",
-                    "Start Date",
-                    "End Date",
-                    "Awarding Agency",
-                    "Award Type",
-                    "Description",
-                    "generated_internal_id",
-                    "piid"
-                ],
-                "page": 1,
-                "limit": min(limit, 25),  # Smaller limit
-                "sort": "Award Amount",
-                "order": "desc"
-            }
-            
-            # Add keywords as separate parameter if provided
-            if keywords and keywords.strip() and keywords.lower() not in ['none', '']:
-                payload["keywords"] = [keywords.strip()]
-                logger.info(f"🔍 Simplified search with keywords: {keywords}")
-            
-            response = requests.post(
-                self.base_url,
-                json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "User-Agent": "Federal-Contract-Research-Tool/1.0"
-                },
-                timeout=30
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                awards_data = data.get('results', data.get('data', []))
-                logger.info(f"✅ Simplified search returned {len(awards_data)} awards")
-                
-                processed_awards = []
-                for award in awards_data:
-                    processed_award = self._process_award_data(award)
-                    if processed_award:
-                        processed_awards.append(processed_award)
-                
-                return processed_awards
-            else:
-                logger.error(f"Simplified search also failed: {response.status_code}")
-                logger.error(f"Response: {response.text}")
-                return self._get_sample_awards(keywords, None)
-                
-        except Exception as e:
-            logger.error(f"Simplified search failed: {str(e)}")
-            return self._get_sample_awards(keywords, None)
-    
-    def _get_sample_awards(self, keywords: Optional[str] = None, agency: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Return sample awards data for demo/testing purposes"""
-        logger.info("📋 Returning sample awards data")
-        
-        # Create sample data that reflects the search parameters
-        keyword_text = keywords if keywords and keywords.lower() not in ['none', ''] else "Technology Services"
-        agency_name = agency if agency and agency.lower() not in ['none', ''] else "GENERAL SERVICES ADMINISTRATION"
-        
-        # Check if searching for a specific contract number
-        contract_number = self._detect_contract_number(keywords)
-        if contract_number:
-            # Return a specific sample for contract number searches
-            return [{
-                "award_id": contract_number,
-                "title": f"Sample Contract - {contract_number}",
-                "recipient_name": "Sample Contractor LLC",
-                "description": f"This is sample data. The actual contract {contract_number} could not be retrieved from USASpending.gov.",
-                "award_amount": 5000000.0,
-                "awarding_agency": "DEPARTMENT OF VETERANS AFFAIRS",
-                "awarding_subagency": "Veterans Health Administration",
-                "start_date": "2023-10-01",
-                "end_date": "2024-09-30",
-                "award_type": "Definitive Contract",
-                "source": "Sample Data"
-            }]
-        
-        sample_awards = [
-            {
-                "award_id": "sample-award-001",
-                "title": f"Sample Contract Award - {keyword_text}",
-                "recipient_name": "Sample Tech Solutions Inc.",
-                "description": f"Sample contract for {keyword_text.lower()}. This is demonstration data reflecting your search criteria.",
-                "award_amount": 2500000.0,
-                "awarding_agency": agency_name,
-                "awarding_subagency": "Federal Acquisition Service",
-                "start_date": "2024-03-15",
-                "end_date": "2025-03-14",
-                "award_type": "Definitive Contract",
-                "source": "Sample Data"
-            },
-            {
-                "award_id": "sample-award-002",
-                "title": f"Sample Professional Services - {keyword_text}",
-                "recipient_name": "Demo Consulting Group LLC",
-                "description": f"Professional services contract for {keyword_text.lower()}. Sample data based on your search parameters.",
-                "award_amount": 1750000.0,
-                "awarding_agency": agency_name,
-                "awarding_subagency": "Technology Services Office",
-                "start_date": "2024-05-01",
-                "end_date": "2025-04-30",
-                "award_type": "Delivery Order",
-                "source": "Sample Data"
-            },
-            {
-                "award_id": "sample-award-003",
-                "title": f"Sample Support Services - {keyword_text}",
-                "recipient_name": "Example Operations Corp",
-                "description": f"Support services for {keyword_text.lower()}. Demonstration data matching your search criteria.",
-                "award_amount": 950000.0,
-                "awarding_agency": agency_name,
-                "awarding_subagency": "Operations Division",
-                "start_date": "2024-07-01",
-                "end_date": "2025-06-30",
-                "award_type": "Purchase Order",
-                "source": "Sample Data"
-            }
-        ]
-        
-        return sample_awards
     
     def _build_filters(self, keywords: Optional[str], awarding_agency: Optional[str], 
                       award_date_from: Optional[str], award_date_to: Optional[str],
                       contract_number: Optional[str] = None) -> Dict[str, Any]:
         """
         Build the filters object according to USASpending API specification
-        FIXED: Proper PIID filter format with quoted values for exact match
         """
         filters = {}
         
-        # If we have a contract number, use PIID filter with quotes for exact match
-        if contract_number:
-            # USASpending API expects quoted values for exact match
-            filters["award_ids"] = [f'"{contract_number}"']
-            logger.info(f"🔍 Using PIID filter for contract number with quotes: \"{contract_number}\"")
-            
-            # Also try without time period restriction for contract number searches
-            # This helps find older contracts
-            filters["time_period"] = [{
-                "start_date": "2010-01-01",  # Go back further for contract searches
-                "end_date": datetime.now().strftime("%Y-%m-%d")
-            }]
-        else:
-            # Add time period filter for regular searches
-            if award_date_from or award_date_to:
-                if not award_date_from:
-                    award_date_from = "2024-01-01"  # Extended range for better results
-                if not award_date_to:
-                    award_date_to = datetime.now().strftime("%Y-%m-%d")
-                
-                filters["time_period"] = [{
-                    "start_date": award_date_from,
-                    "end_date": award_date_to
-                }]
-                logger.info(f"📅 Adding time period filter: {award_date_from} to {award_date_to}")
-            else:
-                # Default to last 6 months for non-contract searches
-                filters["time_period"] = [{
-                    "start_date": "2024-01-01", 
-                    "end_date": datetime.now().strftime("%Y-%m-%d")
-                }]
-                logger.info("📅 Using default time period: last 6 months")
-        
         # Add agency filter using the correct USASpending.gov format
         if awarding_agency and awarding_agency.strip() and awarding_agency.lower() not in ['none', '']:
-            # Use the correct agency filter format for USASpending.gov
             filters["agencies"] = [{
                 "type": "awarding",
                 "tier": "toptier",
@@ -507,11 +277,35 @@ class FPDSService:
             }]
             logger.info(f"🏛️ Adding agency filter: {awarding_agency}")
         
+        # Add time period filter
+        if contract_number:
+            # For contract searches, use wider date range
+            filters["time_period"] = [{
+                "start_date": "2010-01-01",
+                "end_date": datetime.now().strftime("%Y-%m-%d")
+            }]
+            logger.info("📅 Using extended time period for contract search")
+        elif award_date_from or award_date_to:
+            if not award_date_from:
+                award_date_from = "2023-01-01"
+            if not award_date_to:
+                award_date_to = datetime.now().strftime("%Y-%m-%d")
+            
+            filters["time_period"] = [{
+                "start_date": award_date_from,
+                "end_date": award_date_to
+            }]
+            logger.info(f"📅 Adding time period filter: {award_date_from} to {award_date_to}")
+        else:
+            # Default to last 2 years
+            filters["time_period"] = [{
+                "start_date": "2023-01-01", 
+                "end_date": datetime.now().strftime("%Y-%m-%d")
+            }]
+            logger.info("📅 Using default time period: last 2 years")
+        
         # Always include contract award types (A, B, C, D are contract types)
         filters["award_type_codes"] = ["A", "B", "C", "D"]
-        
-        # Note: Keywords are handled separately in the main payload, not in filters
-        # This is because USASpending.gov uses a separate "keywords" parameter for text search
         
         logger.info(f"🔧 Built filters: {json.dumps(filters, indent=2)}")
         return filters
@@ -519,7 +313,7 @@ class FPDSService:
     def _process_award_data(self, award: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Process raw award data from USASpending API into standardized format"""
         try:
-            # Debug: log the structure of the award data
+            # Debug: log the structure of the award data (only once)
             if not hasattr(self, '_logged_structure'):
                 logger.info(f"🔍 Sample award structure: {list(award.keys()) if isinstance(award, dict) else type(award)}")
                 if isinstance(award, dict) and award:
