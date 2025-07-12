@@ -17,6 +17,7 @@ class FPDSService:
         self.database_path = database_path
         # Use the correct USASpending.gov endpoint
         self.base_url = "https://api.usaspending.gov/api/v2/search/spending_by_award"
+        self.transaction_url = "https://api.usaspending.gov/api/v2/search/spending_by_transaction"
         self.init_database()
     
     def init_database(self):
@@ -93,24 +94,34 @@ class FPDSService:
         Returns a value between 0.0 and 1.0
         """
         award_id = str(award.get('award_id', '')).upper()
+        piid = str(award.get('piid', '')).upper()
         search_upper = search_term.upper()
         
         # Remove common delimiters for comparison
         award_id_clean = award_id.replace('-', '').replace(' ', '')
+        piid_clean = piid.replace('-', '').replace(' ', '')
         search_clean = search_upper.replace('-', '').replace(' ', '')
         
         # Exact match = 100% confidence
         if award_id == search_upper or award_id_clean == search_clean:
             return 1.0
+        if piid == search_upper or piid_clean == search_clean:
+            return 1.0
         
         # Check if one contains the other
         if search_upper in award_id or search_clean in award_id_clean:
             return 0.9
+        if search_upper in piid or search_clean in piid_clean:
+            return 0.9
         if award_id in search_upper or award_id_clean in search_clean:
+            return 0.85
+        if piid in search_upper or piid_clean in search_clean:
             return 0.85
         
         # Use sequence matching for fuzzy comparison
-        similarity = SequenceMatcher(None, search_clean, award_id_clean).ratio()
+        similarity_award = SequenceMatcher(None, search_clean, award_id_clean).ratio()
+        similarity_piid = SequenceMatcher(None, search_clean, piid_clean).ratio()
+        similarity = max(similarity_award, similarity_piid)
         
         # Also check description for contract number mentions
         description = str(award.get('description', '')).upper()
@@ -222,6 +233,166 @@ class FPDSService:
             logger.error(f"❌ Error fetching awards: {str(e)}")
             return []
     
+    def get_contract_transactions(self, contract_id: str) -> List[Dict[str, Any]]:
+        """
+        Get detailed transaction history for a specific contract
+        
+        Args:
+            contract_id: The contract ID (PIID) to get transactions for
+            
+        Returns:
+            List of transaction dictionaries
+        """
+        logger.info(f"📊 Fetching transaction history for contract: {contract_id}")
+        
+        try:
+            # Build payload for transaction search
+            payload = {
+                "filters": {
+                    "award_ids": [contract_id],
+                    "award_type_codes": ["A", "B", "C", "D"],  # Contract types
+                    "time_period": [{
+                        "start_date": "2010-01-01",
+                        "end_date": datetime.now().strftime("%Y-%m-%d")
+                    }]
+                },
+                "fields": [
+                    "Award ID",
+                    "Modification Number",
+                    "Transaction Description",
+                    "Action Date",
+                    "Federal Action Obligation",
+                    "Total Dollars Obligated",
+                    "Current Total Value of Award",
+                    "Awarding Agency",
+                    "Awarding Sub Agency",
+                    "Recipient Name",
+                    "Action Type",
+                    "Award Type"
+                ],
+                "page": 1,
+                "limit": 100,
+                "sort": "Action Date",
+                "order": "asc"
+            }
+            
+            logger.info(f"📡 USASpending.gov Transaction API request")
+            
+            # Make the API request
+            response = requests.post(
+                self.transaction_url,
+                json=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": "Federal-Contract-Research-Tool/1.0"
+                },
+                timeout=60
+            )
+            
+            logger.info(f"📊 Transaction API Response Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                # Handle the response structure
+                if 'results' in data:
+                    transactions_data = data['results']
+                else:
+                    logger.warning(f"⚠️ Unexpected transaction response structure: {list(data.keys())}")
+                    transactions_data = []
+                
+                logger.info(f"✅ Successfully fetched {len(transactions_data)} transactions")
+                
+                # Process transactions
+                processed_transactions = []
+                for transaction in transactions_data:
+                    processed_tx = self._process_transaction_data(transaction)
+                    if processed_tx:
+                        processed_transactions.append(processed_tx)
+                
+                return processed_transactions
+                
+            else:
+                logger.error(f"❌ Transaction API error: {response.status_code}")
+                return []
+                
+        except Exception as e:
+            logger.error(f"❌ Error fetching transactions: {str(e)}")
+            return []
+    
+    def _process_transaction_data(self, transaction: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Process raw transaction data from USASpending API"""
+        try:
+            # Extract modification number
+            mod_number = (
+                transaction.get("Modification Number") or 
+                transaction.get("modification_number") or 
+                "BASE"
+            )
+            
+            # Extract action date
+            action_date = self._parse_date(
+                transaction.get("Action Date") or 
+                transaction.get("action_date")
+            )
+            
+            # Extract obligation amount
+            obligation = None
+            for amount_field in [
+                "Federal Action Obligation",
+                "federal_action_obligation",
+                "Action Obligation"
+            ]:
+                if transaction.get(amount_field):
+                    try:
+                        obligation = float(transaction[amount_field])
+                        break
+                    except (ValueError, TypeError):
+                        continue
+            
+            # Extract total value
+            total_value = None
+            for value_field in [
+                "Current Total Value of Award",
+                "current_total_value_of_award",
+                "Total Dollars Obligated",
+                "total_dollars_obligated"
+            ]:
+                if transaction.get(value_field):
+                    try:
+                        total_value = float(transaction[value_field])
+                        break
+                    except (ValueError, TypeError):
+                        continue
+            
+            description = (
+                transaction.get("Transaction Description") or 
+                transaction.get("transaction_description") or 
+                transaction.get("Description") or
+                "No description available"
+            )
+            
+            action_type = (
+                transaction.get("Action Type") or 
+                transaction.get("action_type") or
+                "Unknown"
+            )
+            
+            return {
+                "mod_number": mod_number,
+                "award_date": action_date,
+                "award_amount": obligation,
+                "total_value": total_value,
+                "description": description,
+                "action_type": action_type,
+                "awarding_agency": transaction.get("Awarding Agency") or transaction.get("awarding_agency"),
+                "recipient_name": transaction.get("Recipient Name") or transaction.get("recipient_name")
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error processing transaction data: {str(e)}")
+            return None
+    
     def _build_payload(self, keywords: Optional[str], awarding_agency: Optional[str], 
                       award_date_from: Optional[str], award_date_to: Optional[str], 
                       limit: int, contract_number: Optional[str] = None) -> Dict[str, Any]:
@@ -329,6 +500,9 @@ class FPDSService:
                 f"award-{id(award)}"
             )
             
+            # Store PIID separately for transaction lookups
+            piid = award.get("piid") or award.get("Award ID") or award.get("award_id", "")
+            
             recipient_name = (
                 award.get("Recipient Name") or 
                 award.get("recipient_name") or
@@ -401,6 +575,7 @@ class FPDSService:
             
             return {
                 "award_id": award_id,
+                "piid": piid,  # Store PIID for transaction lookups
                 "title": title,
                 "recipient_name": recipient_name,
                 "description": description,
