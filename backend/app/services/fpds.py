@@ -5,6 +5,7 @@ from typing import List, Dict, Any, Optional
 import json
 import logging
 import time
+import re
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -40,6 +41,51 @@ class FPDSService:
         conn.commit()
         conn.close()
     
+    def _detect_contract_number(self, keywords: Optional[str]) -> Optional[str]:
+        """
+        Detect if the search term is likely a contract number (PIID)
+        
+        Contract numbers typically follow patterns like:
+        - W58RGZ-23-C-0001
+        - 36C10B23N10010013
+        - N00024-21-C-2310
+        - GS-35F-0119Y
+        - HHSN316201200033W
+        """
+        if not keywords:
+            return None
+            
+        # Remove any extra whitespace
+        search_term = keywords.strip()
+        
+        # Common patterns for federal contract numbers
+        contract_patterns = [
+            r'^[A-Z0-9]{2,}-\d{2}-[A-Z]-\d{4}',  # W58RGZ-23-C-0001
+            r'^[A-Z0-9]{6,}\d{8,}$',              # 36C10B23N10010013
+            r'^[A-Z]{1,6}\d{3,}-\d{2}-[A-Z]-\d{4}',  # N00024-21-C-2310
+            r'^[A-Z]{2}-\d{2}[A-Z]-\d{4}[A-Z]?$',    # GS-35F-0119Y
+            r'^[A-Z]{4}\d{9}[A-Z]$',              # HHSN316201200033W
+            r'^[A-Z0-9]{4,}-\d{2,}-[A-Z0-9]-\d{3,}',  # Generic pattern
+            r'^[A-Z0-9]{10,20}$'                  # Long alphanumeric without dashes
+        ]
+        
+        # Check if the search term matches any contract number pattern
+        for pattern in contract_patterns:
+            if re.match(pattern, search_term, re.IGNORECASE):
+                logger.info(f"🔍 Detected contract number pattern: {search_term}")
+                return search_term
+        
+        # Additional check: if it looks like it could be a contract number
+        # (contains both letters and numbers, reasonable length)
+        if (len(search_term) >= 10 and 
+            any(c.isalpha() for c in search_term) and 
+            any(c.isdigit() for c in search_term) and
+            not ' ' in search_term):  # No spaces in contract numbers
+            logger.info(f"🔍 Possible contract number detected: {search_term}")
+            return search_term
+            
+        return None
+    
     def search_awards(self, 
                      keywords: Optional[str] = None,
                      awarding_agency: Optional[str] = None,
@@ -50,7 +96,7 @@ class FPDSService:
         Search for federal contract awards using USASpending.gov API
         
         Args:
-            keywords: Search keywords for award description
+            keywords: Search keywords for award description OR contract number
             awarding_agency: Name of the awarding agency
             award_date_from: Start date (YYYY-MM-DD format)
             award_date_to: End date (YYYY-MM-DD format)
@@ -62,9 +108,12 @@ class FPDSService:
         logger.info(f"🔍 Searching for awards with params: keywords='{keywords}', agency='{awarding_agency}', limit={limit}")
         logger.info(f"📅 Date range: {award_date_from} to {award_date_to}")
         
+        # Check if keywords contain a contract number
+        contract_number = self._detect_contract_number(keywords)
+        
         try:
             # Build the request payload according to USASpending API specification
-            payload = self._build_payload(keywords, awarding_agency, award_date_from, award_date_to, limit)
+            payload = self._build_payload(keywords, awarding_agency, award_date_from, award_date_to, limit, contract_number)
             
             logger.info(f"📡 USASpending.gov API request: {self.base_url}")
             logger.info(f"📋 Request payload: {json.dumps(payload, indent=2)}")
@@ -118,6 +167,11 @@ class FPDSService:
                     if processed_award:
                         processed_awards.append(processed_award)
                 
+                # If no processed awards and we searched for a contract number, try alternative search
+                if not processed_awards and contract_number:
+                    logger.info("📋 No awards found with PIID search, trying alternative search methods...")
+                    return self._try_alternative_contract_search(contract_number, limit)
+                
                 # If no processed awards, return sample data
                 if not processed_awards:
                     logger.info("📋 No awards processed, returning sample data")
@@ -143,12 +197,12 @@ class FPDSService:
     
     def _build_payload(self, keywords: Optional[str], awarding_agency: Optional[str], 
                       award_date_from: Optional[str], award_date_to: Optional[str], 
-                      limit: int) -> Dict[str, Any]:
+                      limit: int, contract_number: Optional[str] = None) -> Dict[str, Any]:
         """
         Build the complete USASpending.gov API payload with proper filter structure
         """
         # Build filters
-        filters = self._build_filters(keywords, awarding_agency, award_date_from, award_date_to)
+        filters = self._build_filters(keywords, awarding_agency, award_date_from, award_date_to, contract_number)
         
         # Build the complete payload
         payload = {
@@ -162,7 +216,9 @@ class FPDSService:
                 "Awarding Agency",
                 "Awarding Sub Agency",
                 "Award Type",
-                "Description"
+                "Description",
+                "generated_internal_id",
+                "piid"
             ],
             "page": 1,
             "limit": min(limit, 100),  # USASpending API limits
@@ -170,13 +226,77 @@ class FPDSService:
             "order": "desc"
         }
         
-        # Add keyword search if provided - this is different from the filters
-        if keywords and keywords.strip() and keywords.lower() not in ['none', '']:
+        # Add keyword search if provided and not a contract number
+        if keywords and keywords.strip() and keywords.lower() not in ['none', ''] and not contract_number:
             # USASpending.gov supports a separate "keywords" parameter for full-text search
             payload["keywords"] = [keywords.strip()]
             logger.info(f"🔍 Added keywords parameter: {keywords}")
         
         return payload
+    
+    def _try_alternative_contract_search(self, contract_number: str, limit: int) -> List[Dict[str, Any]]:
+        """Try alternative search methods for contract numbers"""
+        logger.info(f"🔄 Trying alternative search for contract number: {contract_number}")
+        
+        # Try searching with the contract number as a keyword
+        try:
+            payload = {
+                "filters": {
+                    "award_type_codes": ["A", "B", "C", "D"],
+                    "time_period": [{
+                        "start_date": "2020-01-01",  # Broader date range
+                        "end_date": datetime.now().strftime("%Y-%m-%d")
+                    }]
+                },
+                "keywords": [contract_number],  # Search as keyword instead
+                "fields": [
+                    "Award ID",
+                    "Recipient Name", 
+                    "Award Amount",
+                    "Start Date",
+                    "End Date",
+                    "Awarding Agency",
+                    "Award Type",
+                    "Description",
+                    "generated_internal_id",
+                    "piid"
+                ],
+                "page": 1,
+                "limit": min(limit, 100),
+                "sort": "Award Amount",
+                "order": "desc"
+            }
+            
+            response = requests.post(
+                self.base_url,
+                json=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": "Federal-Contract-Research-Tool/1.0"
+                },
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                awards_data = data.get('results', data.get('data', []))
+                logger.info(f"✅ Alternative search returned {len(awards_data)} awards")
+                
+                processed_awards = []
+                for award in awards_data:
+                    processed_award = self._process_award_data(award)
+                    if processed_award:
+                        # Check if the award ID matches our search
+                        award_id = processed_award.get('award_id', '').upper()
+                        if contract_number.upper() in award_id or award_id in contract_number.upper():
+                            processed_awards.append(processed_award)
+                
+                return processed_awards
+            
+        except Exception as e:
+            logger.error(f"Alternative search failed: {str(e)}")
+        
+        return []
     
     def _try_simplified_search(self, keywords: Optional[str], limit: int) -> List[Dict[str, Any]]:
         """Try a simplified search with minimal filters"""
@@ -200,7 +320,9 @@ class FPDSService:
                     "End Date",
                     "Awarding Agency",
                     "Award Type",
-                    "Description"
+                    "Description",
+                    "generated_internal_id",
+                    "piid"
                 ],
                 "page": 1,
                 "limit": min(limit, 25),  # Smaller limit
@@ -252,6 +374,24 @@ class FPDSService:
         keyword_text = keywords if keywords and keywords.lower() not in ['none', ''] else "Technology Services"
         agency_name = agency if agency and agency.lower() not in ['none', ''] else "GENERAL SERVICES ADMINISTRATION"
         
+        # Check if searching for a specific contract number
+        contract_number = self._detect_contract_number(keywords)
+        if contract_number:
+            # Return a specific sample for contract number searches
+            return [{
+                "award_id": contract_number,
+                "title": f"Sample Contract - {contract_number}",
+                "recipient_name": "Sample Contractor LLC",
+                "description": f"This is sample data. The actual contract {contract_number} could not be retrieved from USASpending.gov.",
+                "award_amount": 5000000.0,
+                "awarding_agency": "DEPARTMENT OF VETERANS AFFAIRS",
+                "awarding_subagency": "Veterans Health Administration",
+                "start_date": "2023-10-01",
+                "end_date": "2024-09-30",
+                "award_type": "Definitive Contract",
+                "source": "Sample Data"
+            }]
+        
         sample_awards = [
             {
                 "award_id": "sample-award-001",
@@ -297,12 +437,18 @@ class FPDSService:
         return sample_awards
     
     def _build_filters(self, keywords: Optional[str], awarding_agency: Optional[str], 
-                      award_date_from: Optional[str], award_date_to: Optional[str]) -> Dict[str, Any]:
+                      award_date_from: Optional[str], award_date_to: Optional[str],
+                      contract_number: Optional[str] = None) -> Dict[str, Any]:
         """
         Build the filters object according to USASpending API specification
         FIXED: Proper agency filter format and keyword handling
         """
         filters = {}
+        
+        # If we have a contract number, use PIID filter
+        if contract_number:
+            filters["award_ids"] = [contract_number]
+            logger.info(f"🔍 Using PIID filter for contract number: {contract_number}")
         
         # Add agency filter using the correct USASpending.gov format
         if awarding_agency and awarding_agency.strip() and awarding_agency.lower() not in ['none', '']:
