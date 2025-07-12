@@ -5,6 +5,78 @@ All notable changes to the Federal Contract Research Tool will be documented in 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2025-01-25] - 03:00 UTC
+
+### Fixed - Contract Number Search in Awards using PIID Filter
+
+**Developer**: Claude (Anthropic)  
+**Fix Type**: SEARCH FUNCTIONALITY FIX  
+**Issue Resolved**: Contract number searches (e.g., "36C10B23N10010013") were not returning matching results from USASpending.gov
+
+#### 🎯 Problem Solved
+User reported that searching for specific contract numbers in the Awards search was not working properly. The system was treating contract numbers as generic keywords rather than using the specific PIID (Procurement Instrument Identifier) filter required by USASpending.gov API, resulting in no matches even for valid contract numbers.
+
+#### 🚀 Implementation Details
+
+**Root Cause**:
+- Contract numbers were being searched as keywords in the general text search
+- USASpending.gov requires PIID searches to use the `award_ids` filter
+- No detection logic to identify when a search term was likely a contract number
+
+**Key Changes**:
+- Added `_detect_contract_number()` method to identify contract number patterns
+- Implemented regex patterns for common federal contract number formats
+- Modified `_build_payload()` to use PIID filter when contract number detected
+- Added fallback search methods for contract numbers if primary search fails
+
+**Contract Number Pattern Detection**:
+```python
+# Common patterns detected:
+- W58RGZ-23-C-0001 (standard format)
+- 36C10B23N10010013 (alphanumeric without dashes)
+- N00024-21-C-2310 (Navy format)
+- GS-35F-0119Y (GSA schedule)
+- HHSN316201200033W (HHS format)
+```
+
+**Technical Implementation**:
+```python
+# Contract number detection
+def _detect_contract_number(self, keywords: Optional[str]) -> Optional[str]:
+    contract_patterns = [
+        r'^[A-Z0-9]{2,}-\d{2}-[A-Z]-\d{4}',
+        r'^[A-Z0-9]{6,}\d{8,}$',
+        # ... additional patterns
+    ]
+    
+# PIID filter usage
+if contract_number:
+    filters["award_ids"] = [contract_number]
+    logger.info(f"🔍 Using PIID filter for contract number: {contract_number}")
+```
+
+#### 📊 Search Improvements
+
+**Before**:
+- Contract numbers searched as general keywords
+- No results returned for valid contract IDs
+- Users unable to find specific contracts by ID
+
+**After**:
+- ✅ Automatic detection of contract number patterns
+- ✅ Proper PIID filter usage for contract searches
+- ✅ Alternative search methods if primary fails
+- ✅ Better handling of various contract number formats
+
+**Fallback Strategies**:
+- If PIID search fails, tries keyword search with broader date range
+- Filters results to match contract number in award_id field
+- Returns sample data with explanation if contract cannot be found
+
+This fix ensures users can reliably search for specific contracts using contract numbers, making the tool more useful for tracking contract modifications and analyzing specific awards.
+
+---
+
 ## [2025-01-24] - 15:45 UTC
 
 ### Fixed - Awards Search Identifier Field Mismatch for Show More/Show Less
