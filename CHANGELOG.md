@@ -5,6 +5,79 @@ All notable changes to the Federal Contract Research Tool will be documented in 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2025-01-27] - 14:30 UTC
+
+### Enhanced - USASpending Transaction History Integration for Contract Analysis
+
+**Developer**: Claude (Anthropic)  
+**Enhancement Type**: MAJOR API INTEGRATION  
+**Issue Resolved**: Contract analysis was using mock data instead of real USASpending.gov transaction history
+
+#### 🎯 Problem Solved
+User reported that the contract analysis feature was using mock/demo data for contract modifications instead of fetching real transaction history from USASpending.gov. This severely limited the tool's utility for analyzing actual contract performance and modification patterns.
+
+#### 🚀 Implementation Details
+
+**Key Enhancements**:
+- Added `get_contract_transactions()` method to FPDS service for fetching real transaction data
+- Created new API endpoint `/api/contracts/contract/{contract_id}/transactions`
+- Updated frontend to use transaction endpoint instead of mock data
+- Modified AwardsList component to pass PIID for transaction lookup
+- Enhanced API service to convert transactions to modification format
+
+**Backend Changes**:
+```python
+# New transaction endpoint in contracts.py
+@router.get("/contract/{contract_id}/transactions")
+async def get_contract_transactions(contract_id: str):
+    fpds_service = FPDSService()
+    transactions = fpds_service.get_contract_transactions(contract_id)
+    # Returns sorted transactions with summary statistics
+
+# FPDS service transaction retrieval
+def get_contract_transactions(self, contract_id: str) -> List[Dict[str, Any]]:
+    # Uses USASpending transaction API endpoint
+    # Fetches modification history, obligations, and action dates
+```
+
+**Frontend Changes**:
+```javascript
+// Updated getContractMods in api.js
+export const getContractMods = async (contractId) => {
+  const response = await api.get(`/api/contracts/contract/${contractId}/transactions`);
+  // Converts transactions to modification format for ContractAnalysis
+};
+
+// AwardsList now uses PIID for lookup
+const contractId = award.piid || award.contract_id || award.award_id;
+const mods = await getContractMods(contractId);
+```
+
+#### 📊 Data Quality Improvements
+
+**Before**:
+- Mock data with arbitrary modification dates and amounts
+- No connection to actual contract performance
+- Limited value for real contract analysis
+
+**After**:
+- ✅ Real transaction history from USASpending.gov
+- ✅ Actual modification numbers, dates, and obligations
+- ✅ Complete contract lifecycle visibility
+- ✅ Accurate financial analysis capabilities
+- ✅ Support for all contract types (A, B, C, D)
+
+**Transaction Data Retrieved**:
+- Modification numbers and descriptions
+- Action dates and obligation amounts
+- Running total contract values
+- Agency and recipient information
+- Action types and award details
+
+This enhancement transforms the contract analysis feature from a demo capability into a production-ready tool that provides real insights into contract performance, modification patterns, and financial trends using actual government data.
+
+---
+
 ## [2025-01-25] - 03:15 UTC
 
 ### Fixed - Improved Contract Number Search with Quoted PIID and Enhanced Fallback
