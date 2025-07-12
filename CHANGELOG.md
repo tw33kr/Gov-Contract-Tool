@@ -5,6 +5,67 @@ All notable changes to the Federal Contract Research Tool will be documented in 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2025-01-25] - 03:15 UTC
+
+### Fixed - Improved Contract Number Search with Quoted PIID and Enhanced Fallback
+
+**Developer**: Claude (Anthropic)  
+**Fix Type**: API INTEGRATION ENHANCEMENT  
+**Issue Resolved**: Contract number searches were still not finding all valid contracts due to USASpending API quirks
+
+#### 🎯 Problem Solved
+While contract number detection was working, the USASpending.gov API requires specific formatting for exact PIID matches. The API documentation indicates that award_ids surrounded by double quotes perform exact matches, which wasn't being utilized. Additionally, some contracts weren't being found due to date range restrictions.
+
+#### 🚀 Implementation Details
+
+**Key Enhancements**:
+- Modified PIID filter to use double quotes for exact matching as per USASpending API docs
+- Extended date range for contract searches (2010-present) to find older contracts
+- Enhanced alternative search with multiple contract number variations
+- Improved matching logic to handle contracts with/without dashes
+
+**Technical Changes**:
+```python
+# Updated PIID filter with quotes for exact match
+if contract_number:
+    filters["award_ids"] = [f'"{contract_number}"']  # Quoted for exact match
+    logger.info(f"🔍 Using PIID filter for contract number with quotes: \"{contract_number}\"")
+
+# Alternative search tries variations
+variations = [
+    contract_number,  # Original
+    contract_number.upper(),  # Uppercase
+    contract_number.replace("-", ""),  # Without dashes
+    contract_number.replace(" ", ""),  # Without spaces
+]
+
+# Improved matching logic
+award_id_clean = award_id.replace("-", "")
+if (search_upper in award_id_clean or 
+    award_id_clean in search_upper or
+    contract_number.upper() in award_id or 
+    award_id in contract_number.upper()):
+    processed_awards.append(processed_award)
+```
+
+#### 📊 Search Reliability Improvements
+
+**Before**:
+- Some valid contract numbers returned no results
+- Date restrictions prevented finding older contracts
+- No variations tried for different formatting
+
+**After**:
+- ✅ Quoted PIID values for exact API matching
+- ✅ Extended date range (2010-present) for contract searches
+- ✅ Multiple variation attempts (with/without dashes, uppercase)
+- ✅ Flexible matching logic for different formats
+- ✅ Better logging to debug search attempts
+
+This enhancement significantly improves the reliability of contract number searches, ensuring users can find specific contracts regardless of formatting variations or contract age.
+
+---
+
 ## [2025-01-25] - 03:00 UTC
 
 ### Fixed - Contract Number Search in Awards using PIID Filter
