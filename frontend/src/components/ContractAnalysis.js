@@ -28,6 +28,7 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
         mod_number: 'BASE',
         award_date: contract.award_date || contractStartDate,
         award_amount: contract.award_amount || 0,
+        total_value: contract.award_amount || 0,  // Add total_value
         description: 'Base Contract Award'
       },
       ...mods
@@ -61,12 +62,29 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
     validMods.sort((a, b) => new Date(a.award_date) - new Date(b.award_date));
     
     // Calculate running total for each mod
+    // If we have total_value from the API (cumulative totals), use those
+    // Otherwise calculate running totals from individual amounts
     let runningTotal = 0;
-    const modsWithRunningTotal = validMods.map(mod => {
-      runningTotal += mod.award_amount;
+    const modsWithRunningTotal = validMods.map((mod, index) => {
+      // If this mod has a total_value from the API, use it as the running total
+      if (mod.total_value !== undefined && mod.total_value !== null) {
+        runningTotal = parseFloat(mod.total_value);
+      } else {
+        // Otherwise calculate running total by adding the award amount
+        runningTotal += mod.award_amount;
+      }
+      
+      // If we have total_value from API and it's not the first mod,
+      // calculate the individual amount by subtracting previous total
+      let individualAmount = mod.award_amount;
+      if (mod.total_value !== undefined && index > 0 && validMods[index - 1].total_value !== undefined) {
+        individualAmount = parseFloat(mod.total_value) - parseFloat(validMods[index - 1].total_value);
+      }
+      
       return {
         ...mod,
-        running_total: runningTotal
+        award_amount: individualAmount,  // Individual modification amount
+        running_total: runningTotal     // Cumulative total
       };
     });
     
@@ -337,7 +355,8 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
       mod: m.mod_number,
       date: m.award_date,
       amount: m.award_amount,
-      running_total: m.running_total
+      running_total: m.running_total,
+      total_value: m.total_value
     })));
 
     return (
