@@ -22,8 +22,8 @@ class FPDSService:
         self.award_url = "https://api.usaspending.gov/api/v2/awards/"
         # Search awards endpoint for getting generated_internal_id
         self.search_awards_url = "https://api.usaspending.gov/api/v2/search/awards/"
-        # Detailed transaction endpoint using generated_id - FIXED: removed 'transactions' from path
-        self.award_transactions_url = "https://api.usaspending.gov/api/v2/award/transaction/"
+        # Detailed transaction endpoint using generated_id - CORRECT FORMAT
+        self.award_transactions_url = "https://api.usaspending.gov/api/v2/award/transactions/"
         # USASpending API constraints
         self.earliest_searchable_date = "2007-10-01"
         self.init_database()
@@ -256,15 +256,10 @@ class FPDSService:
         Search specifically by PIID using the correct USASpending API approach
         """
         try:
-            # USASpending API requires specific format for PIID search
+            # CORRECTED: Use the proper filter structure for PIID search
             payload = {
                 "filters": {
-                    "award_type_codes": ["A", "B", "C", "D"],
-                    "award_ids": [piid.upper()],  # Use award_ids filter for PIID
-                    "time_period": [{
-                        "start_date": self.earliest_searchable_date,  # Use class constant
-                        "end_date": datetime.now().strftime("%Y-%m-%d")
-                    }]
+                    "piid": [piid.upper()]  # This is the correct way to filter by PIID
                 },
                 "fields": [
                     "Award ID",
@@ -287,9 +282,10 @@ class FPDSService:
             }
             
             logger.info(f"📡 PIID-specific search request to USASpending API")
+            logger.info(f"📋 Payload: {json.dumps(payload, indent=2)}")
             
             response = requests.post(
-                self.base_url,
+                self.search_awards_url,  # Use the search/awards endpoint
                 json=payload,
                 headers={
                     "Content-Type": "application/json",
@@ -324,17 +320,17 @@ class FPDSService:
         logger.info(f"🔍 Step 1: Getting generated_internal_id for PIID: {contract_id}")
         
         try:
-            # FIXED: Use correct filter structure as per user instructions
+            # FIXED: Use the CORRECT filter structure as shown in the user's example
             payload = {
                 "filters": {
-                    "piid": [contract_id.upper()]
+                    "piid": [contract_id.upper()]  # THIS IS THE CORRECT FORMAT
                 },
                 "fields": ["generated_internal_id", "Award ID", "recipient_name"],
                 "limit": 1,
                 "page": 1
             }
             
-            logger.info(f"📡 Searching for generated_internal_id at: {self.search_awards_url}")
+            logger.info(f"📡 POST to: {self.search_awards_url}")
             logger.info(f"📋 Payload: {json.dumps(payload, indent=2)}")
             
             response = requests.post(
@@ -392,7 +388,7 @@ class FPDSService:
         
         while has_next and page <= max_pages:
             try:
-                # FIXED: Use correct endpoint path - /api/v2/award/transaction/{generated_id}/
+                # CORRECT: Use the proper endpoint format with the generated_id
                 url = f"{self.award_transactions_url}{generated_id}/"
                 
                 # Parameters for pagination
@@ -402,7 +398,7 @@ class FPDSService:
                     "sort": "-action_date"  # Sort by action date descending
                 }
                 
-                logger.info(f"📡 Fetching page {page} from: {url}")
+                logger.info(f"📡 GET {url}")
                 logger.info(f"📋 Parameters: {params}")
                 
                 response = requests.get(
@@ -472,7 +468,7 @@ class FPDSService:
         Get detailed transaction history for a specific contract
         Uses a two-step process:
         1. Get the generated_internal_id for the PIID using search/awards endpoint
-        2. Use the generated_internal_id to fetch detailed transactions from award/transaction endpoint
+        2. Use the generated_internal_id to fetch detailed transactions from award/transactions endpoint
         
         Args:
             contract_id: The contract ID (PIID) to get transactions for
@@ -491,7 +487,7 @@ class FPDSService:
                 # Fall back to base award info
                 return self._get_base_award_info(contract_id)
             
-            # Step 2: Get detailed transactions using the award/transaction endpoint
+            # Step 2: Get detailed transactions using the award/transactions endpoint
             transactions_data = self._get_detailed_transactions(generated_id)
             
             if not transactions_data:
@@ -858,9 +854,9 @@ class FPDSService:
         """
         filters = {}
         
-        # If contract number detected, use award_ids filter
+        # If contract number detected, use piid filter (CORRECTED)
         if contract_number:
-            filters["award_ids"] = [contract_number.upper()]
+            filters["piid"] = [contract_number.upper()]  # Use piid filter, not award_ids
             logger.info(f"🔍 Using PIID filter for contract number: {contract_number}")
         
         # Add agency filter only if provided and not empty
