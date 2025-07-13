@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import SearchForm from './SearchForm';
 import ContractList from './ContractList';
+import { searchContracts } from '../services/api';
 
 const OpportunitiesTab = () => {
   const [searchResults, setSearchResults] = useState([]);
@@ -12,19 +13,8 @@ const OpportunitiesTab = () => {
     setSearchParams(params);
     
     try {
-      // Build query string from search parameters
-      const queryParams = new URLSearchParams();
-      
-      if (params.keyword) queryParams.append('keyword', params.keyword);
-      if (params.agency) queryParams.append('agency', params.agency);
-      if (params.naics_code) queryParams.append('naics_code', params.naics_code);
-      if (params.set_aside) queryParams.append('set_aside', params.set_aside);
-      if (params.posted_date_from) queryParams.append('posted_date_from', params.posted_date_from);
-      if (params.posted_date_to) queryParams.append('posted_date_to', params.posted_date_to);
-      if (params.limit) queryParams.append('limit', params.limit);
-
-      const response = await fetch(`/api/contracts/search?${queryParams.toString()}`);
-      const data = await response.json();
+      // Use the searchContracts function from api.js
+      const data = await searchContracts(params);
       
       setSearchResults(data.contracts || []);
     } catch (error) {
