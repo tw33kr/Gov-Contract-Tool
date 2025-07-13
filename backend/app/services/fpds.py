@@ -341,17 +341,21 @@ class FPDSService:
         """
         Get detailed transaction history using the generated_internal_id
         This is step 2 of the two-step process
+        Properly handles pagination to get ALL transactions
         """
         logger.info(f"🔍 Step 2: Getting detailed transactions for generated_id: {generated_id}")
         
         all_transactions = []
         page = 1
         has_next = True
+        max_pages = 100  # Safety limit to prevent infinite loops
         
-        while has_next:
+        while has_next and page <= max_pages:
             try:
-                # Build the URL with the generated_id and page
+                # Build the URL with the generated_id
                 url = f"{self.detailed_transaction_url}{generated_id}/"
+                
+                # API requires these parameters in the URL, not as query params
                 params = {
                     "page": page,
                     "limit": 10  # API limit is 10 per page
@@ -379,11 +383,16 @@ class FPDSService:
                         logger.info(f"📋 Page {page}: Found {len(transactions)} transactions")
                     
                     # Check if there's a next page
-                    has_next = data.get('page_metadata', {}).get('has_next_page', False)
+                    page_metadata = data.get('page_metadata', {})
+                    has_next = page_metadata.get('has_next_page', False)
+                    total = page_metadata.get('total', 0)
+                    
+                    logger.info(f"📊 Page metadata: has_next={has_next}, total={total}, current_count={len(all_transactions)}")
+                    
                     if has_next:
                         page += 1
                     else:
-                        logger.info(f"✅ Reached last page. Total transactions: {len(all_transactions)}")
+                        logger.info(f"✅ Reached last page. Total transactions fetched: {len(all_transactions)}")
                 else:
                     logger.error(f"❌ Error fetching page {page}: {response.status_code}")
                     logger.error(f"Response: {response.text[:500]}")
@@ -392,6 +401,9 @@ class FPDSService:
             except Exception as e:
                 logger.error(f"❌ Error fetching detailed transactions page {page}: {str(e)}")
                 break
+        
+        if page > max_pages:
+            logger.warning(f"⚠️ Reached maximum page limit ({max_pages}). Total transactions fetched: {len(all_transactions)}")
         
         return all_transactions
     
@@ -428,12 +440,26 @@ class FPDSService:
             
             logger.info(f"✅ Successfully fetched {len(transactions_data)} detailed transactions")
             
-            # Process transactions
-            processed_transactions = []
+            # Process transactions and group by modification number
+            mod_dict = {}
             for transaction in transactions_data:
                 processed_tx = self._process_detailed_transaction_data(transaction)
                 if processed_tx:
-                    processed_transactions.append(processed_tx)
+                    mod_num = processed_tx['mod_number']
+                    
+                    # Keep only the latest/highest transaction for each modification number
+                    if mod_num in mod_dict:
+                        existing = mod_dict[mod_num]
+                        # Compare by date first, then by amount if dates are equal
+                        if (processed_tx['award_date'] > existing['award_date'] or 
+                            (processed_tx['award_date'] == existing['award_date'] and 
+                             (processed_tx.get('award_amount', 0) or 0) > (existing.get('award_amount', 0) or 0))):
+                            mod_dict[mod_num] = processed_tx
+                    else:
+                        mod_dict[mod_num] = processed_tx
+            
+            # Convert to list
+            processed_transactions = list(mod_dict.values())
             
             # Sort modifications properly (BASE first, then P00001, P00002, etc.)
             def sort_key(mod):
@@ -449,7 +475,7 @@ class FPDSService:
             processed_transactions.sort(key=sort_key)
             
             # Log the processed transactions
-            logger.info(f"📋 Processed {len(processed_transactions)} unique modifications")
+            logger.info(f"📋 Processed {len(processed_transactions)} unique modifications from {len(transactions_data)} total transactions")
             for tx in processed_transactions:
                 logger.info(f"  - {tx['mod_number']}: ${tx.get('award_amount', 0):,.2f} on {tx.get('award_date', 'N/A')}")
             
@@ -475,7 +501,13 @@ class FPDSService:
             if mod_number == "0" or mod_number == "00" or mod_number == "":
                 mod_number = "BASE"
             else:
-                mod_number = f"P{mod_number.zfill(5)}"
+                # Ensure mod_number is padded to 5 digits
+                try:
+                    mod_num_int = int(mod_number)
+                    mod_number = f"P{mod_num_int:05d}"
+                except ValueError:
+                    # If it's not a pure number, use as-is with P prefix
+                    mod_number = f"P{mod_number}"
             
             # Extract action date
             action_date = self._parse_date(
@@ -494,6 +526,21 @@ class FPDSService:
                 if transaction.get(amount_field) is not None:
                     try:
                         obligation = float(transaction[amount_field])
+                        break
+                    except (ValueError, TypeError):
+                        continue
+            
+            # Extract current total value (cumulative)
+            total_value = None
+            for value_field in [
+                "current_total_value_of_award",
+                "Current Total Value of Award",
+                "total_obligated_amount",
+                "Total Obligated Amount"
+            ]:
+                if transaction.get(value_field) is not None:
+                    try:
+                        total_value = float(transaction[value_field])
                         break
                     except (ValueError, TypeError):
                         continue
@@ -517,6 +564,7 @@ class FPDSService:
                 "mod_number": mod_number,
                 "award_date": action_date,
                 "award_amount": obligation,  # Individual transaction amount
+                "total_value": total_value,  # Cumulative total after this transaction
                 "description": description,
                 "action_type": action_type,
                 "awarding_agency": transaction.get("awarding_agency_name") or transaction.get("Awarding Agency"),
