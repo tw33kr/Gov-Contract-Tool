@@ -1,6 +1,6 @@
 // frontend/src/components/ContractAnalysis.js
 import React, { useState, useEffect, useCallback } from 'react';
-import { format, parseISO, getYear, getMonth, startOfYear, endOfYear, isWithinInterval, differenceInDays } from 'date-fns';
+import { format, parseISO, getYear, getMonth, startOfYear, endOfYear, isWithinInterval, differenceInDays, isValid } from 'date-fns';
 
 const ContractAnalysis = ({ contract, mods, onClose }) => {
   const [calendarData, setCalendarData] = useState([]);
@@ -34,28 +34,56 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
       }))
     ];
 
+    // Filter out mods with invalid dates
+    const validMods = combinedMods.filter(mod => {
+      if (!mod.award_date) return false;
+      try {
+        const date = parseISO(mod.award_date);
+        return isValid(date);
+      } catch (error) {
+        console.warn('Invalid date for mod:', mod.mod_number, mod.award_date);
+        return false;
+      }
+    });
+
+    if (validMods.length === 0) {
+      console.error('No valid modifications found with dates');
+      return;
+    }
+
     // Sort by date
-    combinedMods.sort((a, b) => new Date(a.award_date) - new Date(b.award_date));
-    setAllMods(combinedMods);
+    validMods.sort((a, b) => new Date(a.award_date) - new Date(b.award_date));
+    setAllMods(validMods);
 
     // Get contract date range
-    const startDate = parseISO(contractStartDate);
-    const endDate = parseISO(contractEndDate);
+    let startDate, endDate;
+    try {
+      startDate = parseISO(contractStartDate);
+      endDate = parseISO(contractEndDate);
+      
+      if (!isValid(startDate) || !isValid(endDate)) {
+        console.error('Invalid contract dates:', contractStartDate, contractEndDate);
+        return;
+      }
+    } catch (error) {
+      console.error('Error parsing contract dates:', error);
+      return;
+    }
 
     // Analyze by calendar year
-    const calendarYearData = analyzeByCalendarYear(combinedMods, startDate, endDate);
+    const calendarYearData = analyzeByCalendarYear(validMods, startDate, endDate);
     setCalendarData(calendarYearData);
 
     // Analyze by fiscal year
-    const fiscalYearData = analyzeByFiscalYear(combinedMods, startDate, endDate);
+    const fiscalYearData = analyzeByFiscalYear(validMods, startDate, endDate);
     setFiscalData(fiscalYearData);
 
     // Analyze by performance period
-    const performancePeriodData = analyzeByPerformancePeriod(combinedMods, startDate, endDate);
+    const performancePeriodData = analyzeByPerformancePeriod(validMods, startDate, endDate);
     setPerformanceData(performancePeriodData);
 
     // Create unified timeline data
-    createUnifiedTimeline(combinedMods, startDate, endDate, calendarYearData, fiscalYearData, performancePeriodData);
+    createUnifiedTimeline(validMods, startDate, endDate, calendarYearData, fiscalYearData, performancePeriodData);
   }, [contract, mods]);
 
   useEffect(() => {
@@ -107,11 +135,13 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
         if (periodParts.length === 2) {
           try {
             const endDate = parseISO(periodParts[1]);
-            timeline.performanceMarkers.push({
-              date: endDate,
-              label: periodData.year,
-              amount: periodData.totalAmount
-            });
+            if (isValid(endDate)) {
+              timeline.performanceMarkers.push({
+                date: endDate,
+                label: periodData.year,
+                amount: periodData.totalAmount
+              });
+            }
           } catch (error) {
             console.error('Error parsing performance period end date:', periodParts[1]);
           }
@@ -135,7 +165,7 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
         if (!mod.award_date) return false;
         try {
           const modDate = parseISO(mod.award_date);
-          return isWithinInterval(modDate, { start: yearStart, end: yearEnd });
+          return isValid(modDate) && isWithinInterval(modDate, { start: yearStart, end: yearEnd });
         } catch (error) {
           console.error('Error parsing mod date:', mod.award_date);
           return false;
@@ -176,7 +206,7 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
         if (!mod.award_date) return false;
         try {
           const modDate = parseISO(mod.award_date);
-          return isWithinInterval(modDate, { start: fyStart, end: fyEnd });
+          return isValid(modDate) && isWithinInterval(modDate, { start: fyStart, end: fyEnd });
         } catch (error) {
           console.error('Error parsing mod date:', mod.award_date);
           return false;
@@ -215,7 +245,7 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
           if (!mod.award_date) return false;
           try {
             const modDate = parseISO(mod.award_date);
-            return isWithinInterval(modDate, { start, end });
+            return isValid(modDate) && isWithinInterval(modDate, { start, end });
           } catch (error) {
             console.error('Error parsing mod date:', mod.award_date);
             return false;
@@ -261,10 +291,16 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
   };
 
   const renderUnifiedChart = () => {
-    if (!timelineData) return null;
+    if (!timelineData || timelineData.mods.length === 0) {
+      return (
+        <div className="mb-8 p-8 bg-gray-50 rounded-lg text-center">
+          <p className="text-gray-600">No timeline data available for visualization</p>
+        </div>
+      );
+    }
 
     const { startDate, endDate, mods, calendarMarkers, fiscalMarkers, performanceMarkers } = timelineData;
-    const maxAmount = Math.max(...mods.map(m => m.award_amount || 0));
+    const maxAmount = Math.max(...mods.map(m => m.award_amount || 0), 1); // Prevent division by zero
     const chartHeight = 450;
     const chartWidth = 1200;
     const padding = { top: 40, right: 80, bottom: 200, left: 100 };
@@ -274,6 +310,7 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
     // Time scale
     const totalDays = differenceInDays(endDate, startDate) || 1; // Prevent division by zero
     const getXPosition = (date) => {
+      if (!date || !isValid(date)) return padding.left;
       const days = differenceInDays(date, startDate);
       return padding.left + (days / totalDays) * plotWidth;
     };
@@ -308,6 +345,8 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
               if (!mod.award_date) return null;
               try {
                 const modDate = parseISO(mod.award_date);
+                if (!isValid(modDate)) return null;
+                
                 const x = getXPosition(modDate);
                 const y = chartHeight - padding.bottom - ((mod.award_amount || 0) / maxAmount) * plotHeight;
                 
@@ -338,7 +377,7 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
             {/* Calendar Year Markers */}
             {calendarMarkers.map((marker, idx) => {
               const x = getXPosition(marker.date);
-              if (x < padding.left || x > chartWidth - padding.right) return null;
+              if (!isFinite(x) || x < padding.left || x > chartWidth - padding.right) return null;
               
               return (
                 <g key={`cal-${idx}`}>
@@ -361,7 +400,7 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
             {/* Fiscal Year Markers */}
             {fiscalMarkers.map((marker, idx) => {
               const x = getXPosition(marker.date);
-              if (x < padding.left || x > chartWidth - padding.right) return null;
+              if (!isFinite(x) || x < padding.left || x > chartWidth - padding.right) return null;
               
               return (
                 <g key={`fy-${idx}`}>
@@ -384,7 +423,7 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
             {/* Performance Period Markers */}
             {performanceMarkers.map((marker, idx) => {
               const x = getXPosition(marker.date);
-              if (x < padding.left || x > chartWidth - padding.right) return null;
+              if (!isFinite(x) || x < padding.left || x > chartWidth - padding.right) return null;
               
               return (
                 <g key={`pp-${idx}`}>
@@ -490,7 +529,7 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
               <h2 className="text-2xl font-bold mb-2">Contract Analysis</h2>
               <p className="text-green-100">{contract.title}</p>
               <p className="text-sm text-green-200 mt-1">
-                Contract ID: {contract.contract_id || contract.award_id} | 
+                Contract ID: {contract.piid || contract.contract_id || contract.award_id} | 
                 Total Value: {formatCurrency(contract.award_amount + (mods?.reduce((sum, m) => sum + (m.award_amount || 0), 0) || 0))}
               </p>
             </div>
@@ -524,7 +563,9 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
                   <div>
                     <span className="font-medium">{mod.mod_number}</span>
                     <span className="text-sm text-gray-600 ml-2">
-                      {mod.award_date ? format(parseISO(mod.award_date), 'MMM dd, yyyy') : 'No date'}
+                      {mod.award_date && isValid(parseISO(mod.award_date)) 
+                        ? format(parseISO(mod.award_date), 'MMM dd, yyyy') 
+                        : 'No date'}
                     </span>
                     {mod.description && (
                       <span className="text-sm text-gray-500 ml-2">- {mod.description}</span>
