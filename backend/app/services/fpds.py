@@ -417,10 +417,10 @@ class FPDSService:
                     
                     # Check if there's a next page
                     page_metadata = data.get('page_metadata', {})
-                    has_next = page_metadata.get('hasNext', False)
+                    has_next = page_metadata.get('has_next_page', False)
                     total = page_metadata.get('total', 0)
                     
-                    logger.info(f"📊 Page metadata: hasNext={has_next}, total={total}, current_count={len(all_transactions)}")
+                    logger.info(f"📊 Page metadata: has_next={has_next}, total={total}, current_count={len(all_transactions)}")
                     
                     if has_next:
                         page += 1
