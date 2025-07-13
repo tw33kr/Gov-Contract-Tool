@@ -20,9 +20,16 @@ class SAMGovService:
         self.base_url = "https://api.sam.gov/opportunities/v2/search"
         self.init_database()
         
-        # Import FPDS service
-        from app.services.fpds import FPDSService
-        self.fpds_service = FPDSService(database_path)
+        # Lazy import to avoid circular dependency
+        self._fpds_service = None
+    
+    @property
+    def fpds_service(self):
+        """Lazy load FPDS service to avoid circular imports"""
+        if self._fpds_service is None:
+            from app.services.fpds import FPDSService
+            self._fpds_service = FPDSService(self.database_path)
+        return self._fpds_service
     
     def init_database(self):
         """Initialize the database with contracts table"""
@@ -510,7 +517,7 @@ class SAMGovService:
                 "DEPARTMENT OF DEFENSE",
                 "DEPARTMENT OF HOMELAND SECURITY",
                 "DEPARTMENT OF VETERANS AFFAIRS",
-                "DEPARTMENT OF HEALTH AND HUMAN SERVICES",
+                "DEPARTMENT OF HEALTH AND HUMAN SCIENCES",
                 "DEPARTMENT OF ENERGY",
                 "DEPARTMENT OF TRANSPORTATION",
                 "DEPARTMENT OF AGRICULTURE",
