@@ -380,12 +380,52 @@ class FPDSService:
                 
                 logger.info(f"✅ Successfully fetched {len(transactions_data)} transactions")
                 
-                # Process transactions
-                processed_transactions = []
+                # Process transactions and group by modification number
+                mod_dict = {}
                 for transaction in transactions_data:
                     processed_tx = self._process_transaction_data(transaction)
                     if processed_tx:
-                        processed_transactions.append(processed_tx)
+                        mod_num = processed_tx['mod_number']
+                        # If we already have this mod, update the amount to be the highest obligation
+                        if mod_num in mod_dict:
+                            # Keep the transaction with the latest date or highest amount
+                            existing = mod_dict[mod_num]
+                            if (processed_tx['award_date'] > existing['award_date'] or 
+                                (processed_tx['award_amount'] or 0) > (existing['award_amount'] or 0)):
+                                mod_dict[mod_num] = processed_tx
+                        else:
+                            mod_dict[mod_num] = processed_tx
+                
+                # Convert to list and sort by mod number
+                processed_transactions = list(mod_dict.values())
+                
+                # Sort modifications properly (BASE first, then P00001, P00002, etc.)
+                def sort_key(mod):
+                    if mod['mod_number'] == 'BASE':
+                        return (0, 0)
+                    else:
+                        # Extract number from P00001 format
+                        match = re.match(r'P(\d+)', mod['mod_number'])
+                        if match:
+                            return (1, int(match.group(1)))
+                        return (2, mod['mod_number'])
+                
+                processed_transactions.sort(key=sort_key)
+                
+                # Calculate individual mod amounts from cumulative totals
+                if len(processed_transactions) > 1:
+                    for i in range(len(processed_transactions) - 1, 0, -1):
+                        current_total = processed_transactions[i].get('total_value', 0) or 0
+                        prev_total = processed_transactions[i-1].get('total_value', 0) or 0
+                        
+                        # The award_amount should be the difference between cumulative totals
+                        if current_total and prev_total:
+                            processed_transactions[i]['award_amount'] = current_total - prev_total
+                
+                # Log the processed transactions
+                logger.info(f"📋 Processed {len(processed_transactions)} unique modifications")
+                for tx in processed_transactions:
+                    logger.info(f"  - {tx['mod_number']}: ${tx.get('award_amount', 0):,.2f} on {tx.get('award_date', 'N/A')}")
                 
                 # If no transactions found, try to get at least the base award info
                 if not processed_transactions:
@@ -455,7 +495,7 @@ class FPDSService:
                 transaction.get("Action Date")
             )
             
-            # Extract obligation amount
+            # Extract obligation amount (this is the amount for THIS specific transaction)
             obligation = None
             for amount_field in [
                 "federal_action_obligation",
@@ -469,7 +509,7 @@ class FPDSService:
                     except (ValueError, TypeError):
                         continue
             
-            # Extract total value
+            # Extract total value (this is the cumulative total after this transaction)
             total_value = None
             for value_field in [
                 "current_total_value_of_award",
@@ -503,8 +543,8 @@ class FPDSService:
             return {
                 "mod_number": mod_number,
                 "award_date": action_date,
-                "award_amount": obligation,
-                "total_value": total_value,
+                "award_amount": obligation,  # Individual transaction amount
+                "total_value": total_value,   # Cumulative total
                 "description": description,
                 "action_type": action_type,
                 "awarding_agency": transaction.get("awarding_agency_name") or transaction.get("Awarding Agency"),
