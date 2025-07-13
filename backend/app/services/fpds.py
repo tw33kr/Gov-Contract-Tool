@@ -253,7 +253,7 @@ class FPDSService:
             # USASpending API requires specific format for PIID search
             payload = {
                 "filters": {
-                    "award_type_codes": ["A", "B", "C", "D", "E"],
+                    "award_type_codes": ["A", "B", "C", "D"],
                     "award_ids": [piid.upper()],  # Use award_ids filter for PIID
                     "time_period": [{
                         "start_date": "2000-01-01",
@@ -326,7 +326,7 @@ class FPDSService:
             # Use the correct API approach with award_ids filter
             payload = {
                 "filters": {
-                    "award_type_codes": ["A", "B", "C", "D", "E"],
+                    "award_type_codes": ["A", "B", "C", "D"],
                     "award_ids": [contract_id.upper()],  # Use award_ids for specific PIID
                     "time_period": [{
                         "start_date": "2000-01-01",
@@ -612,8 +612,8 @@ class FPDSService:
             }]
             logger.info("📅 Using default time period: last 90 days")
         
-        # Always include contract award types
-        filters["award_type_codes"] = ["A", "B", "C", "D", "E"]
+        # Always include contract award types - USE ONLY VALID VALUES
+        filters["award_type_codes"] = ["A", "B", "C", "D"]
         
         logger.info(f"🔧 Built filters: {json.dumps(filters, indent=2)}")
         return filters
