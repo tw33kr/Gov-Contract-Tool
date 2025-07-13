@@ -5,6 +5,46 @@ All notable changes to the Federal Contract Research Tool will be documented in 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2025-01-31] - 01:30 UTC
+
+### Under Investigation - Contract Transaction History Issue
+
+**Developer**: Claude (Anthropic)  
+**Investigation Type**: TRANSACTION FETCHING ANALYSIS  
+**Issue**: Contract Analysis page showing only 1 transaction for contracts with multiple modifications
+
+#### 🔍 Investigation Summary
+User reported that contract ID "36C10B23N10010013" should have 11 modifications but only 1 is being displayed in the Contract Analysis page. Initial review shows:
+
+1. **Backend Implementation**: The two-step transaction fetching process is correctly implemented:
+   - `_get_generated_id_for_piid()` (Lines 276-317) uses correct filter structure: `{"filters": {"piid": [contract_id.upper()]}}`
+   - `_get_detailed_transactions()` (Lines 320-386) uses correct endpoint: `/api/v2/award/transaction/{generated_id}/`
+   - Pagination logic properly checks `has_next_page` field
+
+2. **Frontend Shows**: 
+   ```
+   📝 Getting contract transaction history for: 36C10B23N10010013
+   Making GET request to /api/contracts/contract/36C10B23N10010013/transactions
+   Retrieved modifications: Array(1)
+   ```
+
+3. **Possible Causes**:
+   - Pagination may not be working correctly despite proper implementation
+   - API response might have changed format
+   - Deduplication logic might be too aggressive
+   - Response data structure might differ from expected format
+
+#### 🚀 Next Steps
+Enhanced debugging has been added to the FPDS service to provide detailed logging of:
+- Step 1 response structure and generated_internal_id retrieval
+- Step 2 pagination details, page counts, and transaction fetching
+- Transaction processing and deduplication logic
+- Response metadata analysis
+
+User should restart backend and check logs for detailed debugging information when searching for contract "36C10B23N10010013".
+
+---
+
 ## [2025-01-30] - 19:00 UTC
 
 ### Fixed - Contract Awards Blank Search and Filtering Issues
