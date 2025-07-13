@@ -20,6 +20,8 @@ class FPDSService:
         self.transaction_url = "https://api.usaspending.gov/api/v2/search/spending_by_transaction"
         # New endpoint for award details
         self.award_url = "https://api.usaspending.gov/api/v2/awards/"
+        # Detailed transaction endpoint
+        self.detailed_transaction_url = "https://api.usaspending.gov/api/v2/award/transaction/contract/"
         # USASpending API constraints
         self.earliest_searchable_date = "2007-10-01"
         self.init_database()
@@ -312,9 +314,93 @@ class FPDSService:
             logger.error(f"❌ Error in PIID search: {str(e)}")
             return []
     
+    def _get_generated_id_for_piid(self, contract_id: str) -> Optional[str]:
+        """
+        Get the generated_internal_id for a given PIID
+        This is step 1 of the two-step process for getting detailed transactions
+        """
+        logger.info(f"🔍 Step 1: Getting generated_internal_id for PIID: {contract_id}")
+        
+        # Search for the award to get its generated_internal_id
+        awards = self._search_by_piid(contract_id)
+        
+        if awards and len(awards) > 0:
+            award = awards[0]
+            generated_id = award.get('generated_internal_id')
+            if generated_id:
+                logger.info(f"✅ Found generated_internal_id: {generated_id}")
+                return generated_id
+            else:
+                logger.warning(f"⚠️ Award found but no generated_internal_id present")
+        else:
+            logger.warning(f"⚠️ No award found for PIID: {contract_id}")
+        
+        return None
+    
+    def _get_detailed_transactions(self, generated_id: str) -> List[Dict[str, Any]]:
+        """
+        Get detailed transaction history using the generated_internal_id
+        This is step 2 of the two-step process
+        """
+        logger.info(f"🔍 Step 2: Getting detailed transactions for generated_id: {generated_id}")
+        
+        all_transactions = []
+        page = 1
+        has_next = True
+        
+        while has_next:
+            try:
+                # Build the URL with the generated_id and page
+                url = f"{self.detailed_transaction_url}{generated_id}/"
+                params = {
+                    "page": page,
+                    "limit": 10  # API limit is 10 per page
+                }
+                
+                logger.info(f"📡 Fetching page {page} from: {url}")
+                
+                response = requests.get(
+                    url,
+                    params=params,
+                    headers={
+                        "Content-Type": "application/json",
+                        "User-Agent": "Federal-Contract-Research-Tool/1.0"
+                    },
+                    timeout=60
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    
+                    # Extract transactions from the response
+                    transactions = data.get('results', [])
+                    if transactions:
+                        all_transactions.extend(transactions)
+                        logger.info(f"📋 Page {page}: Found {len(transactions)} transactions")
+                    
+                    # Check if there's a next page
+                    has_next = data.get('page_metadata', {}).get('has_next_page', False)
+                    if has_next:
+                        page += 1
+                    else:
+                        logger.info(f"✅ Reached last page. Total transactions: {len(all_transactions)}")
+                else:
+                    logger.error(f"❌ Error fetching page {page}: {response.status_code}")
+                    logger.error(f"Response: {response.text[:500]}")
+                    break
+                    
+            except Exception as e:
+                logger.error(f"❌ Error fetching detailed transactions page {page}: {str(e)}")
+                break
+        
+        return all_transactions
+    
     def get_contract_transactions(self, contract_id: str) -> List[Dict[str, Any]]:
         """
         Get detailed transaction history for a specific contract
+        Uses a two-step process:
+        1. Get the generated_internal_id for the PIID
+        2. Use the generated_internal_id to fetch detailed transactions
         
         Args:
             contract_id: The contract ID (PIID) to get transactions for
@@ -325,123 +411,122 @@ class FPDSService:
         logger.info(f"📊 Fetching transaction history for contract: {contract_id}")
         
         try:
-            # Use the correct API approach with award_ids filter
-            payload = {
-                "filters": {
-                    "award_type_codes": ["A", "B", "C", "D"],
-                    "award_ids": [contract_id.upper()],  # Use award_ids for specific PIID
-                    "time_period": [{
-                        "start_date": self.earliest_searchable_date,  # Use class constant
-                        "end_date": datetime.now().strftime("%Y-%m-%d")
-                    }]
-                },
-                "fields": [
-                    "piid",
-                    "modification_number",
-                    "transaction_description",
-                    "action_date",
-                    "federal_action_obligation",
-                    "current_total_value_of_award",
-                    "awarding_agency_name",
-                    "awarding_sub_agency_name",
-                    "recipient_name",
-                    "action_type_description"
-                ],
-                "page": 1,
-                "limit": 1000,  # Get all transactions
-                "sort": "action_date",
-                "order": "asc"
-            }
+            # Step 1: Get the generated_internal_id
+            generated_id = self._get_generated_id_for_piid(contract_id)
             
-            logger.info(f"📡 USASpending.gov Transaction API request")
-            
-            # Make the API request
-            response = requests.post(
-                self.transaction_url,
-                json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "User-Agent": "Federal-Contract-Research-Tool/1.0"
-                },
-                timeout=60
-            )
-            
-            logger.info(f"📊 Transaction API Response Status: {response.status_code}")
-            
-            if response.status_code == 200:
-                data = response.json()
-                
-                # Handle the response structure
-                if 'results' in data:
-                    transactions_data = data['results']
-                else:
-                    logger.warning(f"⚠️ Unexpected transaction response structure: {list(data.keys())}")
-                    transactions_data = []
-                
-                logger.info(f"✅ Successfully fetched {len(transactions_data)} transactions")
-                
-                # Process transactions and group by modification number
-                mod_dict = {}
-                for transaction in transactions_data:
-                    processed_tx = self._process_transaction_data(transaction)
-                    if processed_tx:
-                        mod_num = processed_tx['mod_number']
-                        # If we already have this mod, update the amount to be the highest obligation
-                        if mod_num in mod_dict:
-                            # Keep the transaction with the latest date or highest amount
-                            existing = mod_dict[mod_num]
-                            if (processed_tx['award_date'] > existing['award_date'] or 
-                                (processed_tx['award_amount'] or 0) > (existing['award_amount'] or 0)):
-                                mod_dict[mod_num] = processed_tx
-                        else:
-                            mod_dict[mod_num] = processed_tx
-                
-                # Convert to list and sort by mod number
-                processed_transactions = list(mod_dict.values())
-                
-                # Sort modifications properly (BASE first, then P00001, P00002, etc.)
-                def sort_key(mod):
-                    if mod['mod_number'] == 'BASE':
-                        return (0, 0)
-                    else:
-                        # Extract number from P00001 format
-                        match = re.match(r'P(\d+)', mod['mod_number'])
-                        if match:
-                            return (1, int(match.group(1)))
-                        return (2, mod['mod_number'])
-                
-                processed_transactions.sort(key=sort_key)
-                
-                # Calculate individual mod amounts from cumulative totals
-                if len(processed_transactions) > 1:
-                    for i in range(len(processed_transactions) - 1, 0, -1):
-                        current_total = processed_transactions[i].get('total_value', 0) or 0
-                        prev_total = processed_transactions[i-1].get('total_value', 0) or 0
-                        
-                        # The award_amount should be the difference between cumulative totals
-                        if current_total and prev_total:
-                            processed_transactions[i]['award_amount'] = current_total - prev_total
-                
-                # Log the processed transactions
-                logger.info(f"📋 Processed {len(processed_transactions)} unique modifications")
-                for tx in processed_transactions:
-                    logger.info(f"  - {tx['mod_number']}: ${tx.get('award_amount', 0):,.2f} on {tx.get('award_date', 'N/A')}")
-                
-                # If no transactions found, try to get at least the base award info
-                if not processed_transactions:
-                    logger.warning(f"⚠️ No transactions found, trying to get base award info")
-                    processed_transactions = self._get_base_award_info(contract_id)
-                
-                return processed_transactions
-                
-            else:
-                logger.error(f"❌ Transaction API error: {response.status_code}")
-                logger.error(f"Response: {response.text[:500]}")
+            if not generated_id:
+                logger.error(f"❌ Could not find generated_internal_id for PIID: {contract_id}")
+                # Fall back to base award info
                 return self._get_base_award_info(contract_id)
+            
+            # Step 2: Get detailed transactions using the generated_internal_id
+            transactions_data = self._get_detailed_transactions(generated_id)
+            
+            if not transactions_data:
+                logger.warning(f"⚠️ No detailed transactions found for generated_id: {generated_id}")
+                return self._get_base_award_info(contract_id)
+            
+            logger.info(f"✅ Successfully fetched {len(transactions_data)} detailed transactions")
+            
+            # Process transactions
+            processed_transactions = []
+            for transaction in transactions_data:
+                processed_tx = self._process_detailed_transaction_data(transaction)
+                if processed_tx:
+                    processed_transactions.append(processed_tx)
+            
+            # Sort modifications properly (BASE first, then P00001, P00002, etc.)
+            def sort_key(mod):
+                if mod['mod_number'] == 'BASE':
+                    return (0, 0)
+                else:
+                    # Extract number from P00001 format
+                    match = re.match(r'P(\d+)', mod['mod_number'])
+                    if match:
+                        return (1, int(match.group(1)))
+                    return (2, mod['mod_number'])
+            
+            processed_transactions.sort(key=sort_key)
+            
+            # Log the processed transactions
+            logger.info(f"📋 Processed {len(processed_transactions)} unique modifications")
+            for tx in processed_transactions:
+                logger.info(f"  - {tx['mod_number']}: ${tx.get('award_amount', 0):,.2f} on {tx.get('award_date', 'N/A')}")
+            
+            return processed_transactions
                 
         except Exception as e:
             logger.error(f"❌ Error fetching transactions: {str(e)}")
             return []
+    
+    def _process_detailed_transaction_data(self, transaction: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Process raw transaction data from the detailed transaction endpoint
+        """
+        try:
+            # Extract modification number
+            mod_number = (
+                transaction.get("modification_number") or 
+                transaction.get("Modification Number") or 
+                "0"
+            )
+            
+            # Convert modification number to expected format
+            if mod_number == "0" or mod_number == "00" or mod_number == "":
+                mod_number = "BASE"
+            else:
+                mod_number = f"P{mod_number.zfill(5)}"
+            
+            # Extract action date
+            action_date = self._parse_date(
+                transaction.get("action_date") or 
+                transaction.get("Action Date")
+            )
+            
+            # Extract obligation amount - this is the individual transaction amount
+            obligation = None
+            for amount_field in [
+                "federal_action_obligation",
+                "Federal Action Obligation", 
+                "Action Obligation",
+                "action_obligation"
+            ]:
+                if transaction.get(amount_field) is not None:
+                    try:
+                        obligation = float(transaction[amount_field])
+                        break
+                    except (ValueError, TypeError):
+                        continue
+            
+            description = (
+                transaction.get("description") or
+                transaction.get("Description") or 
+                transaction.get("action_type_description") or
+                transaction.get("Action Type Description") or
+                "No description available"
+            )
+            
+            action_type = (
+                transaction.get("action_type") or 
+                transaction.get("Action Type") or
+                transaction.get("action_type_description") or
+                "Unknown"
+            )
+            
+            return {
+                "mod_number": mod_number,
+                "award_date": action_date,
+                "award_amount": obligation,  # Individual transaction amount
+                "description": description,
+                "action_type": action_type,
+                "awarding_agency": transaction.get("awarding_agency_name") or transaction.get("Awarding Agency"),
+                "recipient_name": transaction.get("recipient_name") or transaction.get("Recipient Name")
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error processing detailed transaction data: {str(e)}")
+            logger.error(f"Transaction data: {json.dumps(transaction, indent=2)[:500]}")
+            return None
     
     def _get_base_award_info(self, contract_id: str) -> List[Dict[str, Any]]:
         """Get base award information when detailed transactions are not available"""
@@ -728,6 +813,9 @@ class FPDSService:
             
             award_id = piid or award.get("generated_internal_id") or f"award-{id(award)}"
             
+            # Extract generated_internal_id - this is critical for transaction lookups
+            generated_internal_id = award.get("generated_internal_id")
+            
             recipient_name = (
                 award.get("Recipient Name") or 
                 award.get("recipient_name") or
@@ -801,6 +889,7 @@ class FPDSService:
             return {
                 "award_id": award_id,
                 "piid": piid,  # Store PIID for transaction lookups
+                "generated_internal_id": generated_internal_id,  # Store for detailed transaction lookups
                 "title": title,
                 "recipient_name": recipient_name,
                 "description": description,
