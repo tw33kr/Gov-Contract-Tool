@@ -5,6 +5,100 @@ All notable changes to the Federal Contract Research Tool will be documented in 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2025-02-08] - 15:00 UTC
+
+### Fixed - Contract Modification Timeline Chart Individual Transaction Display
+
+**Developer**: Claude (Anthropic)  
+**Fix Type**: DATA PROCESSING FIX  
+**Issue Resolved**: Contract Analysis timeline chart was showing only initial obligation amounts as single points instead of individual modification transactions
+
+#### 🎯 Problem Solved
+User reported that the Contract Analysis timeline chart was displaying only the initial obligation amount as a single point on the graph instead of showing all individual modification transactions. The chart was supposed to show multiple points for each modification (e.g., 11 points for a contract with 11 modifications), but was only displaying one point.
+
+#### 🚀 Implementation Details
+
+**Root Cause**:
+The issue was in the `get_contract_transactions` method in the FPDS service. While it was fetching all transactions from USASpending API, it wasn't properly:
+1. Grouping transactions by modification number to avoid duplicates
+2. Calculating individual modification amounts from cumulative totals
+3. Sorting modifications in the correct order (BASE, P00001, P00002, etc.)
+
+**Key Fixes**:
+1. **Transaction Grouping**: Added logic to group transactions by modification number and keep only the most recent/highest value
+2. **Amount Calculation**: Added logic to calculate individual modification amounts by subtracting previous cumulative totals
+3. **Proper Sorting**: Implemented custom sort function to ensure BASE comes first, then modifications in numerical order
+4. **Enhanced Logging**: Added detailed logging to show each processed modification with its amount and date
+
+**Technical Changes**:
+```python
+# Group transactions by modification number
+mod_dict = {}
+for transaction in transactions_data:
+    processed_tx = self._process_transaction_data(transaction)
+    if processed_tx:
+        mod_num = processed_tx['mod_number']
+        # Keep only the latest/highest transaction for each mod
+        if mod_num in mod_dict:
+            existing = mod_dict[mod_num]
+            if (processed_tx['award_date'] > existing['award_date'] or 
+                (processed_tx['award_amount'] or 0) > (existing['award_amount'] or 0)):
+                mod_dict[mod_num] = processed_tx
+        else:
+            mod_dict[mod_num] = processed_tx
+
+# Sort modifications properly
+def sort_key(mod):
+    if mod['mod_number'] == 'BASE':
+        return (0, 0)
+    else:
+        # Extract number from P00001 format
+        match = re.match(r'P(\d+)', mod['mod_number'])
+        if match:
+            return (1, int(match.group(1)))
+        return (2, mod['mod_number'])
+
+processed_transactions.sort(key=sort_key)
+
+# Calculate individual amounts from cumulative totals
+if len(processed_transactions) > 1:
+    for i in range(len(processed_transactions) - 1, 0, -1):
+        current_total = processed_transactions[i].get('total_value', 0) or 0
+        prev_total = processed_transactions[i-1].get('total_value', 0) or 0
+        
+        # The award_amount should be the difference
+        if current_total and prev_total:
+            processed_transactions[i]['award_amount'] = current_total - prev_total
+```
+
+#### 📊 Data Processing Improvements
+
+**Before**:
+- Multiple duplicate transactions for same modification
+- Only showing obligation amounts without proper calculation
+- Modifications not sorted correctly
+- Chart showing single aggregated point
+
+**After**:
+- ✅ One transaction per modification number
+- ✅ Individual modification amounts calculated from cumulative totals
+- ✅ Modifications sorted properly (BASE, P00001, P00002, etc.)
+- ✅ Chart now shows all individual modification points
+- ✅ Enhanced logging shows processed modifications with amounts
+
+**Example Output**:
+```
+📋 Processed 11 unique modifications
+  - BASE: $1,000,000.00 on 2023-01-15
+  - P00001: $250,000.00 on 2023-03-20
+  - P00002: $500,000.00 on 2023-06-10
+  ... etc.
+```
+
+This fix ensures the Contract Analysis timeline chart accurately displays each modification as an individual transaction point, providing clear visibility into how contracts evolve through their modification history.
+
+---
+
 ## [2024-12-19] - 21:00 UTC
 
 ### Fixed - Contract Analysis Timeline Chart Shows Individual Modifications
