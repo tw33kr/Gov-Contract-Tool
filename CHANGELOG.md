@@ -5,6 +5,59 @@ All notable changes to the Federal Contract Research Tool will be documented in 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2025-01-29] - 01:30 UTC
+
+### Fixed - Contract Number Search Auto-Detection for Awards
+
+**Developer**: Claude (Anthropic)  
+**Fix Type**: SEARCH LOGIC ENHANCEMENT  
+**Issue Resolved**: Contract number searches (like "36C10B23N10010013") returned no results when searching without explicit awards filter
+
+#### 🎯 Problem Solved
+User reported that searching for contract ID "36C10B23N10010013" returned no results. The issue was that contract numbers (PIIDs) are awarded contracts, not opportunities, so they're only found in the awards data from USASpending.gov. The search was only looking in opportunities unless the user explicitly enabled the "include_awards" flag.
+
+#### 🚀 Implementation Details
+
+**Key Enhancement**:
+- Added contract number auto-detection to SAMGovService
+- When a contract number pattern is detected, automatically enable awards search
+- Reused existing `_detect_contract_number` logic from FPDS service
+- No breaking changes - maintains backward compatibility
+
+**Technical Changes**:
+```python
+# Added method to detect contract numbers
+def _detect_contract_number(self, keywords: Optional[str]) -> bool:
+    # Detects patterns like:
+    # - W58RGZ-23-C-0001
+    # - 36C10B23N10010013  
+    # - N00024-21-C-2310
+    # Returns True if contract number pattern detected
+
+# Modified search_contracts to auto-enable awards
+is_contract_number = self._detect_contract_number(keywords)
+if is_contract_number:
+    logger.info("📋 Contract number detected - automatically including awards search")
+    include_awards = True
+```
+
+#### 📊 Search Behavior Improvements
+
+**Before**:
+- Contract number searches only looked in opportunities
+- Users had to know to enable awards search
+- Contract IDs returned no results
+
+**After**:
+- ✅ Contract numbers automatically trigger awards search
+- ✅ Works transparently without user intervention
+- ✅ Contract IDs now return proper results
+- ✅ Maintains all existing functionality
+
+This fix ensures users can search for contract numbers naturally without needing to understand the technical distinction between opportunities and awards.
+
+---
+
 ## [2025-01-28] - 02:45 UTC
 
 ### Fixed - PIID Search and Transaction History Using Correct USASpending API Filters
