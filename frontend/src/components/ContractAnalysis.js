@@ -19,23 +19,29 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
       return;
     }
 
-    // Combine base contract and mods
-    const combinedMods = [
+    // Process modifications - check if we already have a BASE in mods
+    const hasBase = mods.some(mod => mod.mod_number === 'BASE');
+    
+    // Only add base contract if not already in mods
+    const combinedMods = hasBase ? [...mods] : [
       {
         mod_number: 'BASE',
         award_date: contract.award_date || contractStartDate,
         award_amount: contract.award_amount || 0,
         description: 'Base Contract Award'
       },
-      ...mods.map(mod => ({
-        ...mod,
-        award_date: mod.award_date || contractStartDate,
-        award_amount: mod.award_amount || 0
-      }))
+      ...mods
     ];
 
+    // Ensure all mods have proper data
+    const processedMods = combinedMods.map(mod => ({
+      ...mod,
+      award_date: mod.award_date || contractStartDate,
+      award_amount: parseFloat(mod.award_amount) || 0
+    }));
+
     // Filter out mods with invalid dates
-    const validMods = combinedMods.filter(mod => {
+    const validMods = processedMods.filter(mod => {
       if (!mod.award_date) return false;
       try {
         const date = parseISO(mod.award_date);
@@ -53,7 +59,18 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
 
     // Sort by date
     validMods.sort((a, b) => new Date(a.award_date) - new Date(b.award_date));
-    setAllMods(validMods);
+    
+    // Calculate running total for each mod
+    let runningTotal = 0;
+    const modsWithRunningTotal = validMods.map(mod => {
+      runningTotal += mod.award_amount;
+      return {
+        ...mod,
+        running_total: runningTotal
+      };
+    });
+    
+    setAllMods(modsWithRunningTotal);
 
     // Get contract date range
     let startDate, endDate;
@@ -71,19 +88,19 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
     }
 
     // Analyze by calendar year
-    const calendarYearData = analyzeByCalendarYear(validMods, startDate, endDate);
+    const calendarYearData = analyzeByCalendarYear(modsWithRunningTotal, startDate, endDate);
     setCalendarData(calendarYearData);
 
     // Analyze by fiscal year
-    const fiscalYearData = analyzeByFiscalYear(validMods, startDate, endDate);
+    const fiscalYearData = analyzeByFiscalYear(modsWithRunningTotal, startDate, endDate);
     setFiscalData(fiscalYearData);
 
     // Analyze by performance period
-    const performancePeriodData = analyzeByPerformancePeriod(validMods, startDate, endDate);
+    const performancePeriodData = analyzeByPerformancePeriod(modsWithRunningTotal, startDate, endDate);
     setPerformanceData(performancePeriodData);
 
     // Create unified timeline data
-    createUnifiedTimeline(validMods, startDate, endDate, calendarYearData, fiscalYearData, performancePeriodData);
+    createUnifiedTimeline(modsWithRunningTotal, startDate, endDate, calendarYearData, fiscalYearData, performancePeriodData);
   }, [contract, mods]);
 
   useEffect(() => {
@@ -300,7 +317,7 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
     }
 
     const { startDate, endDate, mods, calendarMarkers, fiscalMarkers, performanceMarkers } = timelineData;
-    const maxAmount = Math.max(...mods.map(m => m.award_amount || 0), 1); // Prevent division by zero
+    const maxAmount = Math.max(...mods.map(m => m.running_total || m.award_amount || 0), 1); // Use running total
     const chartHeight = 450;
     const chartWidth = 1200;
     const padding = { top: 40, right: 80, bottom: 200, left: 100 };
@@ -315,9 +332,17 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
       return padding.left + (days / totalDays) * plotWidth;
     };
 
+    // Log mod data for debugging
+    console.log('Chart mods data:', mods.map(m => ({
+      mod: m.mod_number,
+      date: m.award_date,
+      amount: m.award_amount,
+      running_total: m.running_total
+    })));
+
     return (
       <div className="mb-8">
-        <h3 className="text-lg font-semibold mb-4">Unified Contract Modification Timeline</h3>
+        <h3 className="text-lg font-semibold mb-4">Contract Modification Timeline</h3>
         <div className="overflow-x-auto">
           <svg width={chartWidth} height={chartHeight} className="bg-white border border-gray-200">
             {/* Y-axis */}
@@ -340,7 +365,30 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
               );
             })}
 
-            {/* Plot modifications */}
+            {/* Plot modifications as a line chart with points */}
+            {mods.length > 1 && (
+              <path
+                d={mods.map((mod, idx) => {
+                  if (!mod.award_date) return '';
+                  try {
+                    const modDate = parseISO(mod.award_date);
+                    if (!isValid(modDate)) return '';
+                    
+                    const x = getXPosition(modDate);
+                    const y = chartHeight - padding.bottom - ((mod.running_total || mod.award_amount || 0) / maxAmount) * plotHeight;
+                    
+                    return `${idx === 0 ? 'M' : 'L'} ${x} ${y}`;
+                  } catch (error) {
+                    return '';
+                  }
+                }).join(' ')}
+                fill="none"
+                stroke="#4f46e5"
+                strokeWidth="2"
+              />
+            )}
+
+            {/* Plot modification points */}
             {mods.map((mod, idx) => {
               if (!mod.award_date) return null;
               try {
@@ -348,24 +396,30 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
                 if (!isValid(modDate)) return null;
                 
                 const x = getXPosition(modDate);
-                const y = chartHeight - padding.bottom - ((mod.award_amount || 0) / maxAmount) * plotHeight;
+                const y = chartHeight - padding.bottom - ((mod.running_total || mod.award_amount || 0) / maxAmount) * plotHeight;
                 
                 return (
                   <g key={idx}>
-                    {/* Vertical line to baseline */}
-                    <line x1={x} y1={chartHeight - padding.bottom} x2={x} y2={y} stroke="#6b7280" strokeWidth="1" opacity="0.3" />
+                    {/* Vertical line to baseline for individual mod amount */}
+                    <line 
+                      x1={x} 
+                      y1={chartHeight - padding.bottom} 
+                      x2={x} 
+                      y2={chartHeight - padding.bottom - ((mod.award_amount || 0) / maxAmount) * plotHeight} 
+                      stroke="#10b981" 
+                      strokeWidth="2" 
+                      opacity="0.5" 
+                    />
                     
                     {/* Mod point */}
-                    <circle cx={x} cy={y} r="5" fill="#6b7280" stroke="white" strokeWidth="2">
-                      <title>{`${mod.mod_number}: ${formatCurrency(mod.award_amount)} on ${format(modDate, 'MMM dd, yyyy')}`}</title>
+                    <circle cx={x} cy={y} r="6" fill="#4f46e5" stroke="white" strokeWidth="2">
+                      <title>{`${mod.mod_number}: ${formatCurrency(mod.award_amount)} on ${format(modDate, 'MMM dd, yyyy')} (Total: ${formatCurrency(mod.running_total)})`}</title>
                     </circle>
                     
-                    {/* Mod label for significant amounts */}
-                    {mod.award_amount > maxAmount * 0.15 && (
-                      <text x={x} y={y - 8} textAnchor="middle" className="text-xs font-medium fill-gray-700">
-                        {mod.mod_number}
-                      </text>
-                    )}
+                    {/* Mod label */}
+                    <text x={x} y={y - 10} textAnchor="middle" className="text-xs font-medium fill-gray-700">
+                      {mod.mod_number}
+                    </text>
                   </g>
                 );
               } catch (error) {
@@ -445,28 +499,28 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
 
             {/* Chart title */}
             <text x={chartWidth / 2} y={20} textAnchor="middle" className="text-base font-semibold fill-gray-700">
-              Contract Modifications Across All Calendar Types
+              Contract Modifications Timeline (Running Total: {formatCurrency(mods[mods.length - 1]?.running_total || 0)})
             </text>
 
             {/* Legend */}
             <g transform={`translate(${padding.left}, ${chartHeight - 50})`}>
               <text x="0" y="0" className="text-xs font-medium fill-gray-600">Legend:</text>
               
+              {/* Running Total Line */}
+              <line x1="80" y1="-3" x2="100" y2="-3" stroke="#4f46e5" strokeWidth="2" />
+              <text x="105" y="0" className="text-xs fill-gray-600">Running Total</text>
+              
+              {/* Individual Mod Amount */}
+              <line x1="220" y1="-3" x2="240" y2="-3" stroke="#10b981" strokeWidth="2" />
+              <text x="245" y="0" className="text-xs fill-gray-600">Mod Amount</text>
+              
               {/* Calendar Year */}
-              <line x1="80" y1="-3" x2="100" y2="-3" stroke="#10b981" strokeWidth="2" />
-              <text x="105" y="0" className="text-xs fill-gray-600">Calendar Year (CY)</text>
+              <line x1="360" y1="-3" x2="380" y2="-3" stroke="#10b981" strokeWidth="2" opacity="0.3" />
+              <text x="385" y="0" className="text-xs fill-gray-600">Calendar Year</text>
               
               {/* Fiscal Year */}
-              <line x1="250" y1="-3" x2="270" y2="-3" stroke="#3b82f6" strokeWidth="2" strokeDasharray="5,5" />
-              <text x="275" y="0" className="text-xs fill-gray-600">Fiscal Year (FY)</text>
-              
-              {/* Performance Period */}
-              <line x1="400" y1="-3" x2="420" y2="-3" stroke="#f59e0b" strokeWidth="2" strokeDasharray="2,2" />
-              <text x="425" y="0" className="text-xs fill-gray-600">Performance Period (PP)</text>
-              
-              {/* Modifications */}
-              <circle cx="590" cy="-3" r="4" fill="#6b7280" />
-              <text x="600" y="0" className="text-xs fill-gray-600">Modifications</text>
+              <line x1="490" y1="-3" x2="510" y2="-3" stroke="#3b82f6" strokeWidth="2" strokeDasharray="5,5" opacity="0.3" />
+              <text x="515" y="0" className="text-xs fill-gray-600">Fiscal Year</text>
             </g>
           </svg>
         </div>
@@ -519,6 +573,11 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
     );
   }
 
+  // Calculate total value including all mods
+  const totalContractValue = allMods.length > 0 
+    ? allMods[allMods.length - 1].running_total 
+    : (contract.award_amount || 0);
+
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-lg shadow-xl max-w-7xl w-full max-h-[90vh] overflow-hidden">
@@ -530,7 +589,8 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
               <p className="text-green-100">{contract.title}</p>
               <p className="text-sm text-green-200 mt-1">
                 Contract ID: {contract.piid || contract.contract_id || contract.award_id} | 
-                Total Value: {formatCurrency(contract.award_amount + (mods?.reduce((sum, m) => sum + (m.award_amount || 0), 0) || 0))}
+                Total Value: {formatCurrency(totalContractValue)} | 
+                Modifications: {allMods.length}
               </p>
             </div>
             <button
@@ -560,7 +620,7 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
             <div className="space-y-2">
               {allMods.map((mod, idx) => (
                 <div key={idx} className="flex justify-between items-center p-3 bg-gray-50 rounded">
-                  <div>
+                  <div className="flex-1">
                     <span className="font-medium">{mod.mod_number}</span>
                     <span className="text-sm text-gray-600 ml-2">
                       {mod.award_date && isValid(parseISO(mod.award_date)) 
@@ -571,7 +631,10 @@ const ContractAnalysis = ({ contract, mods, onClose }) => {
                       <span className="text-sm text-gray-500 ml-2">- {mod.description}</span>
                     )}
                   </div>
-                  <span className="font-medium">{formatCurrency(mod.award_amount)}</span>
+                  <div className="text-right">
+                    <div className="font-medium">{formatCurrency(mod.award_amount)}</div>
+                    <div className="text-sm text-gray-600">Total: {formatCurrency(mod.running_total)}</div>
+                  </div>
                 </div>
               ))}
             </div>
