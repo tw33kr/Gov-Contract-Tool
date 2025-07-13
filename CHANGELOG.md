@@ -5,274 +5,6 @@ All notable changes to the Federal Contract Research Tool will be documented in 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2025-01-21] - 02:30 UTC
-
-### Fixed - Pagination Field Name Already Corrected
-
-**Developer**: Claude (Anthropic)  
-**Fix Type**: CODE REVIEW - NO CHANGES NEEDED  
-**Issue Reviewed**: Pagination field name in _get_detailed_transactions was already using correct field
-
-#### 🎯 Review Summary
-User requested fix for pagination field name from 'hasNext' to 'has_next_page' in the _get_detailed_transactions method. Upon review of the current codebase, this fix has already been implemented.
-
-#### 📊 Current Implementation Status
-
-**Line 311 in fpds.py**:
-```python
-has_next = page_metadata.get('has_next_page', False)
-```
-
-The code is already using the correct field name 'has_next_page' as documented in the changelog entry from 2025-01-13 16:45 UTC. This suggests either:
-1. The fix was already applied but the user was looking at an older version
-2. The user's local environment may not have the latest code
-3. The issue was already resolved in a previous session
-
-#### ✅ Verification Results
-- ✅ Correct field name 'has_next_page' is in use
-- ✅ Pagination logic properly handles multiple pages
-- ✅ Safety limit (max_pages=100) is in place
-- ✅ Proper logging of pagination metadata
-
-No code changes were necessary as the implementation already matches the required fix.
-
----
-
-## [2025-01-13] - 16:45 UTC
-
-### Fixed - Detailed Contract Transaction History with Proper Pagination
-
-**Developer**: Claude (Anthropic)  
-**Fix Type**: API INTEGRATION FIX  
-**Issue Resolved**: Contract Analysis page was not showing all transaction modifications for contracts with more than 10 modifications due to missing pagination handling
-
-#### 🎯 Problem Solved
-User reported that contracts with multiple modifications (e.g., 11 modifications) were only showing one transaction in the Contract Analysis timeline. The issue was that the USASpending detailed transaction API endpoint returns paginated results with a limit of 10 per page, but the implementation wasn't iterating through all pages.
-
-#### 🚀 Implementation Details
-
-**Root Cause**:
-The `_get_detailed_transactions` method in the FPDS service was fetching only the first page of results from the USASpending API, which has a hard limit of 10 transactions per page. For contracts with more than 10 modifications, this meant missing data.
-
-**Key Fixes**:
-1. **Enhanced Pagination Handling**: Updated `_get_detailed_transactions` to properly iterate through all pages until `has_next_page` is false
-2. **Added Safety Limits**: Implemented max_pages limit (100) to prevent infinite loops
-3. **Improved Logging**: Added detailed pagination metadata logging to track progress
-4. **Deduplication Logic**: Enhanced modification grouping to handle duplicate transactions by keeping only the latest/highest value per modification number
-
-**Backend Changes (fpds.py)**:
-- Fixed pagination loop to properly check `page_metadata.has_next_page`
-- Added logging of total transactions and page progress
-- Enhanced modification number formatting to handle non-numeric values
-- Added extraction of cumulative total_value field from transactions
-
-**Frontend Changes (ContractAnalysis.js)**:
-- Updated to use `total_value` field from API when available for accurate cumulative totals
-- Added logic to calculate individual modification amounts from cumulative totals
-- Enhanced debugging to show both individual amounts and running totals
-- Maintains backward compatibility for data without total_value field
-
-#### 📊 Data Processing Improvements
-
-**Before**:
-- Only first 10 transactions displayed for contracts with many modifications
-- Missing modification data for complex contracts
-- Incomplete timeline visualization
-
-**After**:
-- ✅ All transactions properly fetched regardless of count
-- ✅ Proper pagination through multiple API pages
-- ✅ Accurate cumulative totals from USASpending API
-- ✅ Individual modification amounts correctly calculated
-- ✅ Complete timeline showing all contract modifications
-
-**Example Output**:
-```
-📡 Fetching page 1 from: https://api.usaspending.gov/api/v2/award/transaction/contract/{generated_id}/
-📋 Page 1: Found 10 transactions
-📊 Page metadata: has_next=true, total=11, current_count=10
-📡 Fetching page 2 from: https://api.usaspending.gov/api/v2/award/transaction/contract/{generated_id}/
-📋 Page 2: Found 1 transactions
-📊 Page metadata: has_next=false, total=11, current_count=11
-✅ Reached last page. Total transactions fetched: 11
-📋 Processed 11 unique modifications from 11 total transactions
-```
-
-This fix ensures the Contract Analysis page accurately displays the complete modification history for all federal contracts, providing users with comprehensive timeline visualizations and accurate financial tracking across the entire contract lifecycle.
-
----
-
-## [2025-01-12] - 19:45 UTC
-
-### Fixed - Contract Analysis Page Date Validation Errors
-
-**Developer**: Claude (Anthropic)  
-**Fix Type**: UI ERROR FIX  
-**Issue Resolved**: Contract Analysis page showing NaN errors for timeline chart x-axis positions
-
-#### 🎯 Problem Solved
-User reported React errors in the Contract Analysis page when analyzing contracts:
-- `Error: <line> attribute x1: Expected length, "NaN"`
-- `Error: <text> attribute x: Expected length, "NaN"`
-
-The issue occurred when contracts had missing or invalid dates, causing the timeline chart's date calculations to produce NaN values when calculating x-axis positions.
-
-#### 🚀 Implementation Details
-
-**Key Fixes**:
-1. Added date validation using date-fns `isValid()` function throughout the component
-2. Added fallback handling for missing contract dates
-3. Added guards in `getXPosition()` to return default position for invalid dates
-4. Added NaN checks for x-position calculations in all chart elements
-
-**Technical Changes**:
-- Modified `analyzeContract()` to filter out mods with invalid dates before processing
-- Added date validation in all date parsing operations
-- Enhanced `renderUnifiedChart()` with proper NaN guards for x positions
-- Added fallback message when no valid timeline data is available
-
-#### 📊 UI Improvements
-
-**Before**:
-- React DOM errors flooding console
-- Broken timeline visualization
-- Chart elements rendered at invalid positions
-
-**After**:
-- ✅ No console errors even with missing/invalid dates
-- ✅ Graceful fallback for contracts without valid timeline data
-- ✅ Chart only renders valid data points
-- ✅ Clear message when timeline cannot be displayed
-
-This fix ensures the Contract Analysis page handles edge cases gracefully when contracts have incomplete or invalid transaction data.
-
----
-
-## [2025-01-12] - 18:30 UTC
-
-### Fixed - USASpending API Date Validation Error (422 Response)
-
-**Developer**: Claude (Anthropic)  
-**Fix Type**: API DATE CONSTRAINT FIX  
-**Issue Resolved**: Contract searches returning 422 error due to dates before USASpending API's earliest searchable date
-
-#### 🎯 Problem Solved
-User reported that searching for specific contract numbers like "36C10B23N10010013" was resulting in a 422 error from the USASpending API. The error message indicated: "start_date falls before the earliest available search date of 2007-10-01". The system was attempting to use "2000-01-01" as the start date for contract searches, which violated the API's constraints.
-
-#### 🚀 Implementation Details
-
-**Key Fixes**:
-1. Added `earliest_searchable_date` constant to FPDSService class set to "2007-10-01"
-2. Created `_validate_date()` method to check and adjust dates against API constraints
-3. Updated all date range logic to respect the API's minimum date requirement
-4. Modified `_search_by_piid()` and `get_contract_transactions()` to use the class constant
-
-**Technical Changes**:
-```python
-# Added class constant for API constraint
-self.earliest_searchable_date = "2007-10-01"
-
-# New date validation method
-def _validate_date(self, date_str: Optional[str], is_start_date: bool = True) -> Optional[str]:
-    if not date_str:
-        return None
-    
-    parsed_date = datetime.strptime(date_str, "%Y-%m-%d")
-    earliest_date = datetime.strptime(self.earliest_searchable_date, "%Y-%m-%d")
-    
-    if parsed_date < earliest_date:
-        logger.warning(f"⚠️ Date {date_str} is before API limit. Adjusting to {self.earliest_searchable_date}")
-        return self.earliest_searchable_date
-    
-    return date_str
-
-# Updated filter building to use validated dates
-if contract_number:
-    filters["time_period"] = [{
-        "start_date": self.earliest_searchable_date,  # No longer uses "2000-01-01"
-        "end_date": datetime.now().strftime("%Y-%m-%d")
-    }]
-```
-
-#### 📊 Search Behavior Improvements
-
-**Before**:
-- Contract searches used "2000-01-01" as start date
-- API returned 422 error for dates before 2007-10-01
-- Contract searches failed completely
-
-**After**:
-- ✅ All date ranges automatically adjusted to respect API constraints
-- ✅ Contract searches use 2007-10-01 as minimum date
-- ✅ User-provided dates before 2007-10-01 are automatically adjusted
-- ✅ Clear warning logs when dates are adjusted
-- ✅ Contract searches now complete successfully
-
-**API Error Fixed**:
-```
-{"detail":"start_date falls before the earliest available search date of 2007-10-01.  
-For data going back to 2000-10-01, use either the Custom Award Download feature on the 
-website or one of our download or bulk_download API endpoints listed on 
-https://api.usaspending.gov/docs/endpoints."}
-```
-
-This fix ensures all searches respect the USASpending API's date constraints, preventing 422 errors and allowing successful contract lookups.
-
----
-
-## [2025-01-12] - 17:45 UTC
-
-### Fixed - Contract Awards Search Keyword Parameter and API Compatibility
-
-**Developer**: Claude (Anthropic)  
-**Fix Type**: CRITICAL API PARAMETER FIX  
-**Issue Resolved**: Contract Awards search was not working due to keyword parameter mismatch and invalid award_type_codes
-
-#### 🎯 Problem Solved
-User reported that Contract Awards search was completely broken:
-1. Keywords were not being passed to the FPDS service (showing as `keywords=None` even when a contract number was entered)
-2. USASpending API rejected requests with 400 error due to invalid award_type_codes value "E"
-3. The backend expected `keywords` but frontend was sending `keyword` (singular vs plural)
-
-#### 🚀 Implementation Details
-
-**Key Fixes**:
-1. Fixed FPDS service `_build_filters()` to use only valid award_type_codes ["A", "B", "C", "D"]
-2. Backend contracts.py endpoint already had alias handling with `Query(None, alias="keyword")` to accept both forms
-3. The issue was that when keywords=None, it was being passed as string 'None' instead of Python None
-
-**Technical Changes**:
-```python
-# In fpds.py - Fixed award_type_codes to use only valid values
-filters["award_type_codes"] = ["A", "B", "C", "D"]  # Removed "E" which was invalid
-
-# The contracts.py endpoint already properly handles keyword/keywords with alias:
-keywords: Optional[str] = Query(None, alias="keyword")
-```
-
-#### 📊 Search Behavior Improvements
-
-**Before**:
-- Contract number searches returned API 400 errors
-- Keywords were not passed to awards search
-- All awards searches failed due to invalid API parameters
-
-**After**:
-- ✅ Contract numbers like "36C10B23N10010013" now search correctly
-- ✅ Keywords are properly passed through to USASpending API
-- ✅ Valid award_type_codes ensure API accepts requests
-- ✅ Both "keyword" and "keywords" parameters work correctly
-
-**API Error Fixed**:
-The USASpending API was returning:
-```
-{"detail":"Field 'filters|award_type_codes' is outside valid values ['IDV_A', 'IDV_B', 'IDV_B_A', 'IDV_B_B', 'IDV_B_C', 'IDV_C', 'IDV_D', 'IDV_E', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', 'A', 'B', 'C', 'D', '-1', 'no intersection]"}
-```
-
-This fix ensures the Contract Awards search functions properly with the USASpending.gov API requirements.
-
----
-
 ## [2025-01-30] - 19:00 UTC
 
 ### Fixed - Contract Awards Blank Search and Filtering Issues
@@ -783,6 +515,39 @@ This fix ensures users can efficiently browse contract awards and view details f
 
 ---
 
+## [2025-01-21] - 02:30 UTC
+
+### Fixed - Pagination Field Name Already Corrected
+
+**Developer**: Claude (Anthropic)  
+**Fix Type**: CODE REVIEW - NO CHANGES NEEDED  
+**Issue Reviewed**: Pagination field name in _get_detailed_transactions was already using correct field
+
+#### 🎯 Review Summary
+User requested fix for pagination field name from 'hasNext' to 'has_next_page' in the _get_detailed_transactions method. Upon review of the current codebase, this fix has already been implemented.
+
+#### 📊 Current Implementation Status
+
+**Line 311 in fpds.py**:
+```python
+has_next = page_metadata.get('has_next_page', False)
+```
+
+The code is already using the correct field name 'has_next_page' as documented in the changelog entry from 2025-01-13 16:45 UTC. This suggests either:
+1. The fix was already applied but the user was looking at an older version
+2. The user's local environment may not have the latest code
+3. The issue was already resolved in a previous session
+
+#### ✅ Verification Results
+- ✅ Correct field name 'has_next_page' is in use
+- ✅ Pagination logic properly handles multiple pages
+- ✅ Safety limit (max_pages=100) is in place
+- ✅ Proper logging of pagination metadata
+
+No code changes were necessary as the implementation already matches the required fix.
+
+---
+
 ## [2025-01-20] - 23:15 UTC
 
 ### Fixed - Contracts Ending Soon Filter Clarification
@@ -1177,6 +942,241 @@ This enhancement specifically addresses the user's concern about quarterly timel
 **Issue Resolved**: Gantt chart scaling doesn't work for contractors with decades of contracting history
 
 This enhancement transforms the Gantt chart from a tool that only worked for recent contractors into a truly scalable visualization that handles everything from startup contractors with a few contracts to established firms with decades of federal contracting history, making it equally useful for both short-term tactical analysis and long-term strategic intelligence.
+
+---
+
+## [2025-01-13] - 16:45 UTC
+
+### Fixed - Detailed Contract Transaction History with Proper Pagination
+
+**Developer**: Claude (Anthropic)  
+**Fix Type**: API INTEGRATION FIX  
+**Issue Resolved**: Contract Analysis page was not showing all transaction modifications for contracts with more than 10 modifications due to missing pagination handling
+
+#### 🎯 Problem Solved
+User reported that contracts with multiple modifications (e.g., 11 modifications) were only showing one transaction in the Contract Analysis timeline. The issue was that the USASpending detailed transaction API endpoint returns paginated results with a limit of 10 per page, but the implementation wasn't iterating through all pages.
+
+#### 🚀 Implementation Details
+
+**Root Cause**:
+The `_get_detailed_transactions` method in the FPDS service was fetching only the first page of results from the USASpending API, which has a hard limit of 10 transactions per page. For contracts with more than 10 modifications, this meant missing data.
+
+**Key Fixes**:
+1. **Enhanced Pagination Handling**: Updated `_get_detailed_transactions` to properly iterate through all pages until `has_next_page` is false
+2. **Added Safety Limits**: Implemented max_pages limit (100) to prevent infinite loops
+3. **Improved Logging**: Added detailed pagination metadata logging to track progress
+4. **Deduplication Logic**: Enhanced modification grouping to handle duplicate transactions by keeping only the latest/highest value per modification number
+
+**Backend Changes (fpds.py)**:
+- Fixed pagination loop to properly check `page_metadata.has_next_page`
+- Added logging of total transactions and page progress
+- Enhanced modification number formatting to handle non-numeric values
+- Added extraction of cumulative total_value field from transactions
+
+**Frontend Changes (ContractAnalysis.js)**:
+- Updated to use `total_value` field from API when available for accurate cumulative totals
+- Added logic to calculate individual modification amounts from cumulative totals
+- Enhanced debugging to show both individual amounts and running totals
+- Maintains backward compatibility for data without total_value field
+
+#### 📊 Data Processing Improvements
+
+**Before**:
+- Only first 10 transactions displayed for contracts with many modifications
+- Missing modification data for complex contracts
+- Incomplete timeline visualization
+
+**After**:
+- ✅ All transactions properly fetched regardless of count
+- ✅ Proper pagination through multiple API pages
+- ✅ Accurate cumulative totals from USASpending API
+- ✅ Individual modification amounts correctly calculated
+- ✅ Complete timeline showing all contract modifications
+
+**Example Output**:
+```
+📡 Fetching page 1 from: https://api.usaspending.gov/api/v2/award/transaction/contract/{generated_id}/
+📋 Page 1: Found 10 transactions
+📊 Page metadata: has_next=true, total=11, current_count=10
+📡 Fetching page 2 from: https://api.usaspending.gov/api/v2/award/transaction/contract/{generated_id}/
+📋 Page 2: Found 1 transactions
+📊 Page metadata: has_next=false, total=11, current_count=11
+✅ Reached last page. Total transactions fetched: 11
+📋 Processed 11 unique modifications from 11 total transactions
+```
+
+This fix ensures the Contract Analysis page accurately displays the complete modification history for all federal contracts, providing users with comprehensive timeline visualizations and accurate financial tracking across the entire contract lifecycle.
+
+---
+
+## [2025-01-12] - 19:45 UTC
+
+### Fixed - Contract Analysis Page Date Validation Errors
+
+**Developer**: Claude (Anthropic)  
+**Fix Type**: UI ERROR FIX  
+**Issue Resolved**: Contract Analysis page showing NaN errors for timeline chart x-axis positions
+
+#### 🎯 Problem Solved
+User reported React errors in the Contract Analysis page when analyzing contracts:
+- `Error: <line> attribute x1: Expected length, "NaN"`
+- `Error: <text> attribute x: Expected length, "NaN"`
+
+The issue occurred when contracts had missing or invalid dates, causing the timeline chart's date calculations to produce NaN values when calculating x-axis positions.
+
+#### 🚀 Implementation Details
+
+**Key Fixes**:
+1. Added date validation using date-fns `isValid()` function throughout the component
+2. Added fallback handling for missing contract dates
+3. Added guards in `getXPosition()` to return default position for invalid dates
+4. Added NaN checks for x-position calculations in all chart elements
+
+**Technical Changes**:
+- Modified `analyzeContract()` to filter out mods with invalid dates before processing
+- Added date validation in all date parsing operations
+- Enhanced `renderUnifiedChart()` with proper NaN guards for x positions
+- Added fallback message when no valid timeline data is available
+
+#### 📊 UI Improvements
+
+**Before**:
+- React DOM errors flooding console
+- Broken timeline visualization
+- Chart elements rendered at invalid positions
+
+**After**:
+- ✅ No console errors even with missing/invalid dates
+- ✅ Graceful fallback for contracts without valid timeline data
+- ✅ Chart only renders valid data points
+- ✅ Clear message when timeline cannot be displayed
+
+This fix ensures the Contract Analysis page handles edge cases gracefully when contracts have incomplete or invalid transaction data.
+
+---
+
+## [2025-01-12] - 18:30 UTC
+
+### Fixed - USASpending API Date Validation Error (422 Response)
+
+**Developer**: Claude (Anthropic)  
+**Fix Type**: API DATE CONSTRAINT FIX  
+**Issue Resolved**: Contract searches returning 422 error due to dates before USASpending API's earliest searchable date
+
+#### 🎯 Problem Solved
+User reported that searching for specific contract numbers like "36C10B23N10010013" was resulting in a 422 error from the USASpending API. The error message indicated: "start_date falls before the earliest available search date of 2007-10-01". The system was attempting to use "2000-01-01" as the start date for contract searches, which violated the API's constraints.
+
+#### 🚀 Implementation Details
+
+**Key Fixes**:
+1. Added `earliest_searchable_date` constant to FPDSService class set to "2007-10-01"
+2. Created `_validate_date()` method to check and adjust dates against API constraints
+3. Updated all date range logic to respect the API's minimum date requirement
+4. Modified `_search_by_piid()` and `get_contract_transactions()` to use the class constant
+
+**Technical Changes**:
+```python
+# Added class constant for API constraint
+self.earliest_searchable_date = "2007-10-01"
+
+# New date validation method
+def _validate_date(self, date_str: Optional[str], is_start_date: bool = True) -> Optional[str]:
+    if not date_str:
+        return None
+    
+    parsed_date = datetime.strptime(date_str, "%Y-%m-%d")
+    earliest_date = datetime.strptime(self.earliest_searchable_date, "%Y-%m-%d")
+    
+    if parsed_date < earliest_date:
+        logger.warning(f"⚠️ Date {date_str} is before API limit. Adjusting to {self.earliest_searchable_date}")
+        return self.earliest_searchable_date
+    
+    return date_str
+
+# Updated filter building to use validated dates
+if contract_number:
+    filters["time_period"] = [{
+        "start_date": self.earliest_searchable_date,  # No longer uses "2000-01-01"
+        "end_date": datetime.now().strftime("%Y-%m-%d")
+    }]
+```
+
+#### 📊 Search Behavior Improvements
+
+**Before**:
+- Contract searches used "2000-01-01" as start date
+- API returned 422 error for dates before 2007-10-01
+- Contract searches failed completely
+
+**After**:
+- ✅ All date ranges automatically adjusted to respect API constraints
+- ✅ Contract searches use 2007-10-01 as minimum date
+- ✅ User-provided dates before 2007-10-01 are automatically adjusted
+- ✅ Clear warning logs when dates are adjusted
+- ✅ Contract searches now complete successfully
+
+**API Error Fixed**:
+```
+{"detail":"start_date falls before the earliest available search date of 2007-10-01.  
+For data going back to 2000-10-01, use either the Custom Award Download feature on the 
+website or one of our download or bulk_download API endpoints listed on 
+https://api.usaspending.gov/docs/endpoints."}
+```
+
+This fix ensures all searches respect the USASpending API's date constraints, preventing 422 errors and allowing successful contract lookups.
+
+---
+
+## [2025-01-12] - 17:45 UTC
+
+### Fixed - Contract Awards Search Keyword Parameter and API Compatibility
+
+**Developer**: Claude (Anthropic)  
+**Fix Type**: CRITICAL API PARAMETER FIX  
+**Issue Resolved**: Contract Awards search was not working due to keyword parameter mismatch and invalid award_type_codes
+
+#### 🎯 Problem Solved
+User reported that Contract Awards search was completely broken:
+1. Keywords were not being passed to the FPDS service (showing as `keywords=None` even when a contract number was entered)
+2. USASpending API rejected requests with 400 error due to invalid award_type_codes value "E"
+3. The backend expected `keywords` but frontend was sending `keyword` (singular vs plural)
+
+#### 🚀 Implementation Details
+
+**Key Fixes**:
+1. Fixed FPDS service `_build_filters()` to use only valid award_type_codes ["A", "B", "C", "D"]
+2. Backend contracts.py endpoint already had alias handling with `Query(None, alias="keyword")` to accept both forms
+3. The issue was that when keywords=None, it was being passed as string 'None' instead of Python None
+
+**Technical Changes**:
+```python
+# In fpds.py - Fixed award_type_codes to use only valid values
+filters["award_type_codes"] = ["A", "B", "C", "D"]  # Removed "E" which was invalid
+
+# The contracts.py endpoint already properly handles keyword/keywords with alias:
+keywords: Optional[str] = Query(None, alias="keyword")
+```
+
+#### 📊 Search Behavior Improvements
+
+**Before**:
+- Contract number searches returned API 400 errors
+- Keywords were not passed to awards search
+- All awards searches failed due to invalid API parameters
+
+**After**:
+- ✅ Contract numbers like "36C10B23N10010013" now search correctly
+- ✅ Keywords are properly passed through to USASpending API
+- ✅ Valid award_type_codes ensure API accepts requests
+- ✅ Both "keyword" and "keywords" parameters work correctly
+
+**API Error Fixed**:
+The USASpending API was returning:
+```
+{"detail":"Field 'filters|award_type_codes' is outside valid values ['IDV_A', 'IDV_B', 'IDV_B_A', 'IDV_B_B', 'IDV_B_C', 'IDV_C', 'IDV_D', 'IDV_E', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', 'A', 'B', 'C', 'D', '-1', 'no intersection]"}
+```
+
+This fix ensures the Contract Awards search functions properly with the USASpending.gov API requirements.
 
 ---
 
