@@ -256,7 +256,7 @@ class FPDSService:
                     "award_type_codes": ["A", "B", "C", "D"],
                     "award_ids": [piid.upper()],  # Use award_ids filter for PIID
                     "time_period": [{
-                        "start_date": "2000-01-01",
+                        "start_date": "2007-10-01",  # USASpending earliest searchable date
                         "end_date": datetime.now().strftime("%Y-%m-%d")
                     }]
                 },
@@ -329,7 +329,7 @@ class FPDSService:
                     "award_type_codes": ["A", "B", "C", "D"],
                     "award_ids": [contract_id.upper()],  # Use award_ids for specific PIID
                     "time_period": [{
-                        "start_date": "2000-01-01",
+                        "start_date": "2007-10-01",  # USASpending earliest searchable date
                         "end_date": datetime.now().strftime("%Y-%m-%d")
                     }]
                 },
@@ -585,12 +585,12 @@ class FPDSService:
         
         # Add time period filter
         if contract_number:
-            # For contract searches, use wider date range
+            # For contract searches, use wider date range but within API limits
             filters["time_period"] = [{
-                "start_date": "2000-01-01",
+                "start_date": "2007-10-01",  # USASpending earliest searchable date
                 "end_date": datetime.now().strftime("%Y-%m-%d")
             }]
-            logger.info("📅 Using extended time period for contract search")
+            logger.info("📅 Using extended time period for contract search (from 2007-10-01)")
         elif award_date_from or award_date_to:
             # Use provided dates or default to recent period
             if not award_date_from:
@@ -598,6 +598,11 @@ class FPDSService:
                 award_date_from = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
             if not award_date_to:
                 award_date_to = datetime.now().strftime("%Y-%m-%d")
+            
+            # Ensure dates are not before API limit
+            if award_date_from < "2007-10-01":
+                logger.warning(f"⚠️ Adjusting start date from {award_date_from} to 2007-10-01 (API limit)")
+                award_date_from = "2007-10-01"
             
             filters["time_period"] = [{
                 "start_date": award_date_from,
