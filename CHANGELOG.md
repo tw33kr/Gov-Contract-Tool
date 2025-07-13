@@ -5,6 +5,65 @@ All notable changes to the Federal Contract Research Tool will be documented in 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2025-01-30] - 19:00 UTC
+
+### Fixed - Contract Awards Blank Search and Filtering Issues
+
+**Developer**: Claude (Anthropic)  
+**Fix Type**: SEARCH FUNCTIONALITY FIX  
+**Issue Resolved**: Contract Awards search returned no results for blank searches and had filtering issues
+
+#### 🎯 Problem Solved
+User reported that Contract Awards search was not working properly:
+1. Blank searches returned no results when they should show recent awards
+2. Contract number searches like "36C10B23N10010013" were not finding matches
+3. Agency and keyword filters were overly restrictive
+
+#### 🚀 Implementation Details
+
+**Key Fixes**:
+- Modified `_build_payload()` to handle blank searches properly by not adding keywords filter when empty
+- Updated `_build_filters()` to skip agency filter when value is empty or "all"
+- Enhanced logging to show when blank searches are being performed
+- Improved filter validation to prevent empty values from blocking results
+
+**Technical Changes**:
+```python
+# In _build_payload - handle blank searches
+if keywords and keywords.strip() and keywords.lower() not in ['none', ''] and not contract_number:
+    payload["keywords"] = [keywords.strip()]
+    logger.info(f"🔍 Using keywords parameter: {keywords}")
+elif not keywords or not keywords.strip():
+    logger.info(f"📋 Blank search - returning recent awards without keyword filter")
+
+# In _build_filters - skip empty agency filter
+if awarding_agency and awarding_agency.strip() and awarding_agency.lower() not in ['none', '', 'all']:
+    filters["agencies"] = [{
+        "type": "awarding",
+        "tier": "toptier",
+        "name": awarding_agency.strip()
+    }]
+```
+
+#### 📊 Search Behavior Improvements
+
+**Before**:
+- Blank searches returned no results
+- Empty keywords were sent as filter parameters
+- Agency filter applied even when "All Agencies" selected
+- No indication of what type of search was being performed
+
+**After**:
+- ✅ Blank searches return recent awards (last 90 days)
+- ✅ Empty parameters are properly excluded from API calls
+- ✅ "All Agencies" selection doesn't filter results
+- ✅ Clear logging shows search type (blank, keyword, or contract number)
+- ✅ Contract number detection still works as before
+
+This fix ensures the Contract Awards search functions properly for all search scenarios, making the tool more user-friendly and reliable.
+
+---
+
 ## [2025-01-29] - 01:30 UTC
 
 ### Fixed - Contract Number Search Auto-Detection for Awards
