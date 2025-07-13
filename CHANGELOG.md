@@ -5,6 +5,83 @@ All notable changes to the Federal Contract Research Tool will be documented in 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2025-01-28] - 02:45 UTC
+
+### Fixed - PIID Search and Transaction History Using Correct USASpending API Filters
+
+**Developer**: Claude (Anthropic)  
+**Fix Type**: CRITICAL API INTEGRATION FIX  
+**Issue Resolved**: Contract searches by PIID and transaction history were not working properly due to incorrect API filter usage
+
+#### 🎯 Problem Solved
+User reported two critical issues:
+1. Searching for specific contracts by PIID (e.g., "36C10B23N10010013") returned no results even though the contract exists
+2. Transaction history for contracts was not pulling any data, showing empty modification tables
+
+The root cause was that the USASpending.gov API requires the `award_ids` filter for PIID searches rather than the `keywords` parameter, and agency filtering was inadvertently blocking valid results.
+
+#### 🚀 Implementation Details
+
+**Key Fixes**:
+- Added dedicated `_search_by_piid()` method that uses the correct `award_ids` filter
+- Modified search logic to detect PIIDs and route to the appropriate search method
+- Fixed transaction history endpoint to use `award_ids` filter instead of keywords
+- Corrected agency filter logic that was preventing keyword searches from working
+- Extended date ranges for contract searches (2000-present) to find older contracts
+- Added fallback logic to retrieve base award info when detailed transactions unavailable
+
+**Technical Changes**:
+```python
+# Correct PIID search using award_ids filter
+def _search_by_piid(self, piid: str) -> List[Dict[str, Any]]:
+    payload = {
+        "filters": {
+            "award_type_codes": ["A", "B", "C", "D", "E"],
+            "award_ids": [piid.upper()],  # Correct filter for PIID
+            "time_period": [{
+                "start_date": "2000-01-01",
+                "end_date": datetime.now().strftime("%Y-%m-%d")
+            }]
+        },
+        # ... other fields
+    }
+
+# Transaction history with proper filtering
+def get_contract_transactions(self, contract_id: str):
+    payload = {
+        "filters": {
+            "award_ids": [contract_id.upper()],  # Use award_ids for specific PIID
+            # ... other filters
+        }
+    }
+```
+
+#### 📊 Search & Transaction Improvements
+
+**Before**:
+- PIID searches returned no results
+- Transaction history showed empty tables
+- Keywords were blocked when agency filter was applied
+- Contract searches limited to recent 2 years
+
+**After**:
+- ✅ PIID searches work correctly using the `award_ids` filter
+- ✅ Transaction history retrieves all contract modifications
+- ✅ Keywords and agency filters work together properly
+- ✅ Extended date range (2000-present) for contract searches
+- ✅ Fallback to base award info when transactions unavailable
+- ✅ Better logging to debug API interactions
+
+**Test Case Verified**:
+Successfully tested with PIID `36C10B23N10010013` (Cognosante's VA Cloud Operations Migration Services Contract):
+- Contract now appears in search results
+- Transaction history shows modification table
+- All contract details properly retrieved
+
+This fix ensures users can reliably search for specific contracts by PIID and view their complete transaction history, making the tool suitable for real contract analysis and tracking.
+
+---
+
 ## [2025-01-27] - 14:30 UTC
 
 ### Enhanced - USASpending Transaction History Integration for Contract Analysis
