@@ -5,7 +5,53 @@ All notable changes to the Federal Contract Research Tool will be documented in 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2025-07-12] - 18:30 UTC
+## [2025-01-12] - 19:45 UTC
+
+### Fixed - Contract Analysis Page Date Validation Errors
+
+**Developer**: Claude (Anthropic)  
+**Fix Type**: UI ERROR FIX  
+**Issue Resolved**: Contract Analysis page showing NaN errors for timeline chart x-axis positions
+
+#### 🎯 Problem Solved
+User reported React errors in the Contract Analysis page when analyzing contracts:
+- `Error: <line> attribute x1: Expected length, "NaN"`
+- `Error: <text> attribute x: Expected length, "NaN"`
+
+The issue occurred when contracts had missing or invalid dates, causing the timeline chart's date calculations to produce NaN values when calculating x-axis positions.
+
+#### 🚀 Implementation Details
+
+**Key Fixes**:
+1. Added date validation using date-fns `isValid()` function throughout the component
+2. Added fallback handling for missing contract dates
+3. Added guards in `getXPosition()` to return default position for invalid dates
+4. Added NaN checks for x-position calculations in all chart elements
+
+**Technical Changes**:
+- Modified `analyzeContract()` to filter out mods with invalid dates before processing
+- Added date validation in all date parsing operations
+- Enhanced `renderUnifiedChart()` with proper NaN guards for x positions
+- Added fallback message when no valid timeline data is available
+
+#### 📊 UI Improvements
+
+**Before**:
+- React DOM errors flooding console
+- Broken timeline visualization
+- Chart elements rendered at invalid positions
+
+**After**:
+- ✅ No console errors even with missing/invalid dates
+- ✅ Graceful fallback for contracts without valid timeline data
+- ✅ Chart only renders valid data points
+- ✅ Clear message when timeline cannot be displayed
+
+This fix ensures the Contract Analysis page handles edge cases gracefully when contracts have incomplete or invalid transaction data.
+
+---
+
+## [2025-01-12] - 18:30 UTC
 
 ### Fixed - USASpending API Date Validation Error (422 Response)
 
@@ -77,7 +123,7 @@ This fix ensures all searches respect the USASpending API's date constraints, pr
 
 ---
 
-## [2025-07-12] - 17:45 UTC
+## [2025-01-12] - 17:45 UTC
 
 ### Fixed - Contract Awards Search Keyword Parameter and API Compatibility
 
@@ -123,7 +169,7 @@ keywords: Optional[str] = Query(None, alias="keyword")
 **API Error Fixed**:
 The USASpending API was returning:
 ```
-{"detail":"Field 'filters|award_type_codes' is outside valid values ['IDV_A', 'IDV_B', 'IDV_B_A', 'IDV_B_B', 'IDV_B_C', 'IDV_C', 'IDV_D', 'IDV_E', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', 'A', 'B', 'C', 'D', '-1', 'no intersection']"}
+{"detail":"Field 'filters|award_type_codes' is outside valid values ['IDV_A', 'IDV_B', 'IDV_B_A', 'IDV_B_B', 'IDV_B_C', 'IDV_C', 'IDV_D', 'IDV_E', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', 'A', 'B', 'C', 'D', '-1', 'no intersection]"}
 ```
 
 This fix ensures the Contract Awards search functions properly with the USASpending.gov API requirements.
@@ -1051,3 +1097,4 @@ Enhanced the ContractorTimeline component to focus on business intelligence by i
 This enhancement transforms the ContractorTimeline from a simple contract list into a powerful business intelligence tool that helps users understand contractor capacity, revenue patterns, and optimal timing for business relationships.
 
 ---
+
