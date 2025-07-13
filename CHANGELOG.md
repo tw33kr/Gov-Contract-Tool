@@ -5,6 +5,52 @@ All notable changes to the Federal Contract Research Tool will be documented in 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2024-12-19] - 21:00 UTC
+
+### Fixed - Contract Analysis Timeline Chart Shows Individual Modifications
+
+**Developer**: Claude (Anthropic)  
+**Fix Type**: VISUALIZATION FIX  
+**Issue Resolved**: Contract Analysis timeline chart was showing a single point with total value instead of individual modification transactions
+
+#### 🎯 Problem Solved
+User reported that the Contract Analysis timeline chart was displaying only a single point with the whole TCV (Total Contract Value) instead of showing multiple points for each modification transaction. For example, a contract with 11 modifications like the Cloud Operations Migration Services contract was showing as a single aggregated point rather than 11 distinct transactions on the timeline.
+
+#### 🚀 Implementation Details
+
+**Key Fixes**:
+1. Added running total calculation to track cumulative contract value after each modification
+2. Changed visualization from individual points to a line chart showing running total progression
+3. Added vertical bars showing individual modification amounts
+4. Improved data handling to prevent duplicate BASE entries when already present in mods
+5. Enhanced chart legend to explain the dual visualization (running total line + individual mod bars)
+
+**Technical Changes**:
+- Modified `analyzeContract()` to calculate running totals for each modification
+- Updated `renderUnifiedChart()` to display both line chart and individual modification bars
+- Changed Y-axis maximum to use running total instead of individual amounts
+- Added debugging logs to track modification data flow
+- Enhanced modification details section to show both individual and cumulative amounts
+
+#### 📊 Visualization Improvements
+
+**Before**:
+- Single point showing total contract value
+- No visibility into modification timeline
+- Misleading representation of contract evolution
+
+**After**:
+- ✅ Line chart showing cumulative contract value progression
+- ✅ Individual modification amounts displayed as vertical bars
+- ✅ Each modification clearly labeled with its number
+- ✅ Hover tooltips show both individual and cumulative values
+- ✅ Chart title displays final running total
+- ✅ Modification details table shows running totals
+
+This fix ensures the Contract Analysis page accurately visualizes the contract modification timeline, providing clear insights into how contract values evolve through modifications over time.
+
+---
+
 ## [2025-01-12] - 19:45 UTC
 
 ### Fixed - Contract Analysis Page Date Validation Errors
