@@ -347,15 +347,21 @@ class FPDSService:
                 timeout=60
             )
             
+            logger.info(f"📊 Step 1 Response Status: {response.status_code}")
+            
             if response.status_code == 200:
                 data = response.json()
                 results = data.get('results', [])
+                
+                # Debug log the full response
+                logger.info(f"🔍 Step 1 Response: {json.dumps(data, indent=2)[:1000]}")
                 
                 if results and len(results) > 0:
                     result = results[0]
                     generated_id = result.get('generated_internal_id')
                     if generated_id:
                         logger.info(f"✅ Found generated_internal_id: {generated_id}")
+                        logger.info(f"📋 Award details: PIID={result.get('Award ID')}, Recipient={result.get('recipient_name')}")
                         return generated_id
                     else:
                         logger.warning(f"⚠️ Award found but no generated_internal_id in response: {result}")
@@ -367,6 +373,8 @@ class FPDSService:
                 
         except Exception as e:
             logger.error(f"❌ Error in _get_generated_id_for_piid: {str(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
         
         return None
     
@@ -395,6 +403,7 @@ class FPDSService:
                 }
                 
                 logger.info(f"📡 Fetching page {page} from: {url}")
+                logger.info(f"📋 Parameters: {params}")
                 
                 response = requests.get(
                     url,
@@ -406,14 +415,29 @@ class FPDSService:
                     timeout=60
                 )
                 
+                logger.info(f"📊 Page {page} Response Status: {response.status_code}")
+                
                 if response.status_code == 200:
                     data = response.json()
+                    
+                    # Debug log structure of first response
+                    if page == 1:
+                        logger.info(f"🔍 Response structure keys: {list(data.keys())}")
+                        if 'page_metadata' in data:
+                            logger.info(f"📊 Page metadata: {data['page_metadata']}")
                     
                     # Extract transactions from the response
                     transactions = data.get('results', [])
                     if transactions:
                         all_transactions.extend(transactions)
-                        logger.info(f"📋 Page {page}: Found {len(transactions)} transactions")
+                        logger.info(f"📋 Page {page}: Found {len(transactions)} transactions (running total: {len(all_transactions)})")
+                        
+                        # Log details of first few transactions
+                        if page == 1:
+                            for i, tx in enumerate(transactions[:3]):
+                                logger.info(f"  Transaction {i+1}: Mod={tx.get('modification_number')}, Date={tx.get('action_date')}, Amount={tx.get('federal_action_obligation')}")
+                    else:
+                        logger.info(f"📋 Page {page}: No transactions found")
                     
                     # Check if there's a next page
                     page_metadata = data.get('page_metadata', {})
@@ -424,6 +448,7 @@ class FPDSService:
                     
                     if has_next:
                         page += 1
+                        logger.info(f"📄 Moving to page {page}...")
                     else:
                         logger.info(f"✅ Reached last page. Total transactions fetched: {len(all_transactions)}")
                 else:
@@ -433,6 +458,8 @@ class FPDSService:
                     
             except Exception as e:
                 logger.error(f"❌ Error fetching detailed transactions page {page}: {str(e)}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
                 break
         
         if page > max_pages:
@@ -475,10 +502,14 @@ class FPDSService:
             
             # Process transactions and group by modification number
             mod_dict = {}
-            for transaction in transactions_data:
+            for idx, transaction in enumerate(transactions_data):
                 processed_tx = self._process_detailed_transaction_data(transaction)
                 if processed_tx:
                     mod_num = processed_tx['mod_number']
+                    
+                    # Debug log
+                    if idx < 5:  # Log first 5 processed transactions
+                        logger.info(f"🔄 Processed tx {idx+1}: {mod_num} - ${processed_tx.get('award_amount', 0):,.2f} - {processed_tx.get('award_date')}")
                     
                     # Keep only the latest/highest transaction for each modification number
                     if mod_num in mod_dict:
@@ -488,8 +519,11 @@ class FPDSService:
                             (processed_tx['award_date'] == existing['award_date'] and 
                              (processed_tx.get('total_value', 0) or 0) > (existing.get('total_value', 0) or 0))):
                             mod_dict[mod_num] = processed_tx
+                            logger.info(f"🔄 Replaced {mod_num} with newer/higher transaction")
                     else:
                         mod_dict[mod_num] = processed_tx
+            
+            logger.info(f"📋 Unique modifications found: {list(mod_dict.keys())}")
             
             # Convert to list
             processed_transactions = list(mod_dict.values())
@@ -526,6 +560,8 @@ class FPDSService:
                 
         except Exception as e:
             logger.error(f"❌ Error fetching transactions: {str(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return []
     
     def _process_detailed_transaction_data(self, transaction: Dict[str, Any]) -> Optional[Dict[str, Any]]:
