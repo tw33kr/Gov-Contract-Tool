@@ -5,6 +5,63 @@ All notable changes to the Federal Contract Research Tool will be documented in 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2025-02-01] - 02:00 UTC
+
+### Fixed - USASpending API internal_id Field Compatibility
+
+**Developer**: Claude (Anthropic)  
+**Fix Type**: API COMPATIBILITY FIX  
+**Issue Resolved**: Contract transaction history not retrieving all modifications due to API returning `internal_id` instead of `generated_internal_id`
+
+#### 🎯 Problem Solved
+User identified that the USASpending API was returning `"internal_id": 100847848` but `"generated_internal_id": null` in the response. The code was only looking for `generated_internal_id`, causing the transaction retrieval to fail and only show 1 modification instead of all 11 modifications for contracts like "36C10B23N10010013".
+
+#### 🚀 Implementation Details
+
+**Key Fixes**:
+- Modified `_get_generated_id_for_piid` method to check for both `generated_internal_id` and `internal_id` fields
+- Added fallback logic to use `internal_id` when `generated_internal_id` is null
+- Added `internal_id` to fields list in both `_get_generated_id_for_piid` and `_search_by_piid` methods
+- Converts numeric `internal_id` to string to maintain consistency with expected data type
+
+**Technical Changes**:
+```python
+# In _get_generated_id_for_piid (lines 305-314)
+# Try to get internal ID from multiple possible fields
+internal_id = None
+
+# First try generated_internal_id
+if result.get('generated_internal_id'):
+    internal_id = result.get('generated_internal_id')
+    logger.info(f"✅ Found generated_internal_id: {internal_id}")
+# Then try internal_id (what the API actually returns)
+elif result.get('internal_id'):
+    internal_id = str(result.get('internal_id'))  # Convert to string if number
+    logger.info(f"✅ Found internal_id: {internal_id}")
+
+# Updated fields lists to include internal_id
+"fields": ["generated_internal_id", "internal_id", "Award ID", "piid", "recipient_name"]
+```
+
+#### 📊 Transaction Fetching Improvements
+
+**Before**:
+- Code only checked for `generated_internal_id` field
+- When API returned `internal_id` instead, Step 1 failed
+- Only base award transaction displayed (1 modification)
+- Users missing complete contract modification history
+
+**After**:
+- ✅ Checks both `generated_internal_id` and `internal_id` fields
+- ✅ Automatically uses whichever field the API provides
+- ✅ Successfully retrieves the ID regardless of field name
+- ✅ All contract modifications now displayed (e.g., all 11 mods)
+- ✅ Maintains compatibility with both field naming conventions
+
+This fix ensures the tool remains compatible with USASpending API response variations, providing users with complete contract modification history regardless of which field name the API uses for the internal identifier.
+
+---
+
 ## [2025-01-31] - 16:00 UTC
 
 ### Fixed - Contract Transaction History PIID Filter Structure
