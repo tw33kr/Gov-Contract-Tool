@@ -22,8 +22,8 @@ class FPDSService:
         self.award_url = "https://api.usaspending.gov/api/v2/awards/"
         # Search awards endpoint for getting generated_internal_id
         self.search_awards_url = "https://api.usaspending.gov/api/v2/search/awards/"
-        # Detailed transaction endpoint using generated_id
-        self.award_transactions_url = "https://api.usaspending.gov/api/v2/award/transactions/"
+        # Detailed transaction endpoint using generated_id - FIXED: removed 'transactions' from path
+        self.award_transactions_url = "https://api.usaspending.gov/api/v2/award/transaction/"
         # USASpending API constraints
         self.earliest_searchable_date = "2007-10-01"
         self.init_database()
@@ -324,7 +324,7 @@ class FPDSService:
         logger.info(f"🔍 Step 1: Getting generated_internal_id for PIID: {contract_id}")
         
         try:
-            # Use the search/awards endpoint to get generated_internal_id
+            # FIXED: Use correct filter structure as per user instructions
             payload = {
                 "filters": {
                     "piid": [contract_id.upper()]
@@ -384,7 +384,7 @@ class FPDSService:
         
         while has_next and page <= max_pages:
             try:
-                # Build the URL with the generated_id
+                # FIXED: Use correct endpoint path - /api/v2/award/transaction/{generated_id}/
                 url = f"{self.award_transactions_url}{generated_id}/"
                 
                 # Parameters for pagination
@@ -445,7 +445,7 @@ class FPDSService:
         Get detailed transaction history for a specific contract
         Uses a two-step process:
         1. Get the generated_internal_id for the PIID using search/awards endpoint
-        2. Use the generated_internal_id to fetch detailed transactions from award/transactions endpoint
+        2. Use the generated_internal_id to fetch detailed transactions from award/transaction endpoint
         
         Args:
             contract_id: The contract ID (PIID) to get transactions for
@@ -464,7 +464,7 @@ class FPDSService:
                 # Fall back to base award info
                 return self._get_base_award_info(contract_id)
             
-            # Step 2: Get detailed transactions using the award/transactions endpoint
+            # Step 2: Get detailed transactions using the award/transaction endpoint
             transactions_data = self._get_detailed_transactions(generated_id)
             
             if not transactions_data:
