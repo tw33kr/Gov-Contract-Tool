@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import time
+import re
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -52,6 +53,51 @@ class SAMGovService:
         conn.commit()
         conn.close()
     
+    def _detect_contract_number(self, keywords: Optional[str]) -> bool:
+        """
+        Detect if the search term is likely a contract number (PIID)
+        
+        Contract numbers typically follow patterns like:
+        - W58RGZ-23-C-0001
+        - 36C10B23N10010013
+        - N00024-21-C-2310
+        - GS-35F-0119Y
+        - HHSN316201200033W
+        """
+        if not keywords:
+            return False
+            
+        # Remove any extra whitespace
+        search_term = keywords.strip()
+        
+        # Common patterns for federal contract numbers
+        contract_patterns = [
+            r'^[A-Z0-9]{2,}-\d{2}-[A-Z]-\d{4}',  # W58RGZ-23-C-0001
+            r'^[A-Z0-9]{6,}\d{8,}$',              # 36C10B23N10010013
+            r'^[A-Z]{1,6}\d{3,}-\d{2}-[A-Z]-\d{4}',  # N00024-21-C-2310
+            r'^[A-Z]{2}-\d{2}[A-Z]-\d{4}[A-Z]?$',    # GS-35F-0119Y
+            r'^[A-Z]{4}\d{9}[A-Z]$',              # HHSN316201200033W
+            r'^[A-Z0-9]{4,}-\d{2,}-[A-Z0-9]-\d{3,}',  # Generic pattern
+            r'^[A-Z0-9]{10,20}$'                  # Long alphanumeric without dashes
+        ]
+        
+        # Check if the search term matches any contract number pattern
+        for pattern in contract_patterns:
+            if re.match(pattern, search_term, re.IGNORECASE):
+                logger.info(f"🔍 Detected contract number pattern: {search_term}")
+                return True
+        
+        # Additional check: if it looks like it could be a contract number
+        # (contains both letters and numbers, reasonable length)
+        if (len(search_term) >= 10 and 
+            any(c.isalpha() for c in search_term) and 
+            any(c.isdigit() for c in search_term) and
+            not ' ' in search_term):  # No spaces in contract numbers
+            logger.info(f"🔍 Possible contract number detected: {search_term}")
+            return True
+            
+        return False
+    
     def search_contracts(self, 
                         keywords: Optional[str] = None,
                         agency: Optional[str] = None,
@@ -79,10 +125,16 @@ class SAMGovService:
         """
         logger.info(f"🔍 Searching contracts with params: keywords='{keywords}', agency='{agency}', limit={limit}, include_awards={include_awards}")
         
+        # Auto-detect contract numbers and force awards search
+        is_contract_number = self._detect_contract_number(keywords)
+        if is_contract_number:
+            logger.info("📋 Contract number detected - automatically including awards search")
+            include_awards = True
+        
         # Search for opportunities
         opportunities = self._search_opportunities(keywords, agency, naics, set_aside, posted_from, posted_to, limit)
         
-        # Search for awards if requested
+        # Search for awards if requested or if contract number detected
         awards = []
         if include_awards:
             logger.info("🏆 Awards requested - fetching FPDS data...")
@@ -92,6 +144,7 @@ class SAMGovService:
         logger.info(f"  - Opportunities: {len(opportunities)}")
         logger.info(f"  - Awards: {len(awards)}")
         logger.info(f"  - Include awards flag: {include_awards}")
+        logger.info(f"  - Is contract number: {is_contract_number}")
         
         return opportunities, awards
     
