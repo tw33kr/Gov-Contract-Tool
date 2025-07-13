@@ -273,7 +273,8 @@ class FPDSService:
                     "Awarding Sub Agency",
                     "Award Type",
                     "Description",
-                    "generated_internal_id"
+                    "generated_internal_id",
+                    "internal_id"  # Add this line
                 ],
                 "page": 1,
                 "limit": 10,
@@ -325,7 +326,7 @@ class FPDSService:
                 "filters": {
                     "piid": [contract_id.upper()]  # THIS IS THE CORRECT FORMAT
                 },
-                "fields": ["generated_internal_id", "Award ID", "recipient_name"],
+                "fields": ["generated_internal_id", "internal_id", "Award ID", "piid", "recipient_name"],
                 "limit": 1,
                 "page": 1
             }
@@ -354,13 +355,24 @@ class FPDSService:
                 
                 if results and len(results) > 0:
                     result = results[0]
-                    generated_id = result.get('generated_internal_id')
-                    if generated_id:
-                        logger.info(f"✅ Found generated_internal_id: {generated_id}")
+                    
+                    # Try to get internal ID from multiple possible fields
+                    internal_id = None
+                    
+                    # First try generated_internal_id
+                    if result.get('generated_internal_id'):
+                        internal_id = result.get('generated_internal_id')
+                        logger.info(f"✅ Found generated_internal_id: {internal_id}")
+                    # Then try internal_id (what the API actually returns)
+                    elif result.get('internal_id'):
+                        internal_id = str(result.get('internal_id'))  # Convert to string if number
+                        logger.info(f"✅ Found internal_id: {internal_id}")
+                    
+                    if internal_id:
                         logger.info(f"📋 Award details: PIID={result.get('Award ID')}, Recipient={result.get('recipient_name')}")
-                        return generated_id
+                        return internal_id
                     else:
-                        logger.warning(f"⚠️ Award found but no generated_internal_id in response: {result}")
+                        logger.warning(f"⚠️ Award found but no internal ID in response: {result}")
                 else:
                     logger.warning(f"⚠️ No results found for PIID: {contract_id}")
             else:
