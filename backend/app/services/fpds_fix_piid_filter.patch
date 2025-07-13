@@ -1,0 +1,33 @@
+--- a/backend/app/services/fpds.py
++++ b/backend/app/services/fpds.py
+@@ -280,7 +280,7 @@ class FPDSService:
+         try:
+             # FIXED: Use correct filter structure as per user instructions
+             payload = {
+                 "filters": {
+-                    "piid": [contract_id.upper()]
++                    "piid": [contract_id.upper()]  # THIS IS THE CORRECT FORMAT
+                 },
+                 "fields": ["generated_internal_id", "Award ID", "recipient_name"],
+                 "limit": 1,
+@@ -196,7 +196,7 @@ class FPDSService:
+         try:
+             # CORRECTED: Use the proper filter structure for PIID search
+             payload = {
+                 "filters": {
+-                    "piid": [piid.upper()]  # This is the correct way to filter by PIID
++                    "piid": [piid.upper()]  # Use piid filter, not award_ids
+                 },
+                 "fields": [
+                     "Award ID",
+@@ -685,8 +685,8 @@ class FPDSService:
+         """
+         filters = {}
+         
+-        # If contract number detected, use award_ids filter
++        # If contract number detected, use piid filter (CORRECTED)
+         if contract_number:
+-            filters["award_ids"] = [contract_number.upper()]
++            filters["piid"] = [contract_number.upper()]  # Use piid filter, not award_ids
+             logger.info(f"🔍 Using PIID filter for contract number: {contract_number}")
+         
