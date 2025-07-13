@@ -1,6 +1,6 @@
 import requests
 import sqlite3
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import List, Dict, Any, Optional, Tuple
 import json
 import logging
@@ -566,6 +566,11 @@ class FPDSService:
         """
         filters = {}
         
+        # If contract number detected, use award_ids filter
+        if contract_number:
+            filters["award_ids"] = [contract_number.upper()]
+            logger.info(f"🔍 Using PIID filter for contract number: {contract_number}")
+        
         # Add agency filter using the correct USASpending.gov format
         if awarding_agency and awarding_agency.strip() and awarding_agency.lower() not in ['none', '']:
             filters["agencies"] = [{
@@ -584,8 +589,10 @@ class FPDSService:
             }]
             logger.info("📅 Using extended time period for contract search")
         elif award_date_from or award_date_to:
+            # Use provided dates or default to recent period
             if not award_date_from:
-                award_date_from = "2023-01-01"
+                # Default to 90 days ago if no from date
+                award_date_from = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
             if not award_date_to:
                 award_date_to = datetime.now().strftime("%Y-%m-%d")
             
@@ -595,12 +602,12 @@ class FPDSService:
             }]
             logger.info(f"📅 Adding time period filter: {award_date_from} to {award_date_to}")
         else:
-            # Default to last 2 years
+            # Default to last 90 days for blank searches
             filters["time_period"] = [{
-                "start_date": "2023-01-01", 
+                "start_date": (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d"), 
                 "end_date": datetime.now().strftime("%Y-%m-%d")
             }]
-            logger.info("📅 Using default time period: last 2 years")
+            logger.info("📅 Using default time period: last 90 days")
         
         # Always include contract award types
         filters["award_type_codes"] = ["A", "B", "C", "D", "E"]
