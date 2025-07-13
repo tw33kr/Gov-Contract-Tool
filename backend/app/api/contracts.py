@@ -253,6 +253,150 @@ async def get_contract_transactions(contract_id: str):
         logger.error(f"❌ Error getting contract transactions: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error retrieving contract transactions: {str(e)}")
 
+# DEBUG ENDPOINT FOR TRANSACTION TESTING
+@router.get("/contract/{contract_id}/transactions/debug")
+async def debug_contract_transactions(contract_id: str):
+    """
+    Debug endpoint to trace the exact transaction fetching process
+    """
+    try:
+        logger.info(f"🔍 DEBUG: Transaction fetching for contract: {contract_id}")
+        
+        from app.services.fpds import FPDSService
+        import requests
+        import json
+        
+        fpds_service = FPDSService()
+        debug_info = {
+            "contract_id": contract_id,
+            "step_1_generated_id": None,
+            "step_1_response": None,
+            "step_2_transactions": [],
+            "step_2_pagination": [],
+            "final_processed": None,
+            "errors": []
+        }
+        
+        # Step 1: Get generated_internal_id
+        try:
+            payload = {
+                "filters": {
+                    "piid": [contract_id.upper()]
+                },
+                "fields": ["generated_internal_id", "Award ID", "recipient_name"],
+                "limit": 1,
+                "page": 1
+            }
+            
+            response = requests.post(
+                fpds_service.search_awards_url,
+                json=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": "Federal-Contract-Research-Tool/1.0"
+                },
+                timeout=60
+            )
+            
+            debug_info["step_1_response"] = {
+                "status_code": response.status_code,
+                "response_data": response.json() if response.status_code == 200 else response.text[:500]
+            }
+            
+            if response.status_code == 200:
+                data = response.json()
+                results = data.get('results', [])
+                if results:
+                    debug_info["step_1_generated_id"] = results[0].get('generated_internal_id')
+                    
+        except Exception as e:
+            debug_info["errors"].append(f"Step 1 error: {str(e)}")
+        
+        # Step 2: Get transactions if we have generated_id
+        if debug_info["step_1_generated_id"]:
+            generated_id = debug_info["step_1_generated_id"]
+            page = 1
+            has_next = True
+            
+            while has_next and page <= 5:  # Limit to 5 pages for debug
+                try:
+                    url = f"{fpds_service.award_transactions_url}{generated_id}/"
+                    params = {
+                        "page": page,
+                        "limit": 50,
+                        "sort": "-action_date"
+                    }
+                    
+                    response = requests.get(
+                        url,
+                        params=params,
+                        headers={
+                            "Content-Type": "application/json",
+                            "User-Agent": "Federal-Contract-Research-Tool/1.0"
+                        },
+                        timeout=60
+                    )
+                    
+                    page_info = {
+                        "page": page,
+                        "url": url,
+                        "params": params,
+                        "status_code": response.status_code,
+                        "response_keys": None,
+                        "transaction_count": 0,
+                        "page_metadata": None,
+                        "sample_transaction": None
+                    }
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        page_info["response_keys"] = list(data.keys())
+                        
+                        transactions = data.get('results', [])
+                        page_info["transaction_count"] = len(transactions)
+                        
+                        if transactions:
+                            # Sample first transaction
+                            page_info["sample_transaction"] = {
+                                "modification_number": transactions[0].get('modification_number'),
+                                "action_date": transactions[0].get('action_date'),
+                                "federal_action_obligation": transactions[0].get('federal_action_obligation'),
+                                "current_total_value_of_award": transactions[0].get('current_total_value_of_award')
+                            }
+                            debug_info["step_2_transactions"].extend(transactions)
+                        
+                        page_metadata = data.get('page_metadata', {})
+                        page_info["page_metadata"] = page_metadata
+                        has_next = page_metadata.get('has_next_page', False)
+                        
+                    debug_info["step_2_pagination"].append(page_info)
+                    
+                    if has_next:
+                        page += 1
+                    else:
+                        break
+                        
+                except Exception as e:
+                    debug_info["errors"].append(f"Step 2 page {page} error: {str(e)}")
+                    break
+        
+        # Try to process transactions
+        if debug_info["step_2_transactions"]:
+            try:
+                processed = fpds_service.get_contract_transactions(contract_id)
+                debug_info["final_processed"] = {
+                    "count": len(processed),
+                    "modifications": [t.get('mod_number') for t in processed]
+                }
+            except Exception as e:
+                debug_info["errors"].append(f"Processing error: {str(e)}")
+        
+        return debug_info
+        
+    except Exception as e:
+        logger.error(f"❌ Debug endpoint error: {str(e)}")
+        return {"error": str(e)}
+
 @router.get("/agencies")
 async def get_agencies():
     """
