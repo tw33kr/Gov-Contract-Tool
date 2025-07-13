@@ -551,10 +551,13 @@ class FPDSService:
             "order": "desc"
         }
         
-        # Only use keywords if NOT a contract number (contract numbers use award_ids filter instead)
+        # Only use keywords if NOT a contract number and NOT empty
+        # For blank searches, we want to return all recent awards
         if keywords and keywords.strip() and keywords.lower() not in ['none', ''] and not contract_number:
             payload["keywords"] = [keywords.strip()]
             logger.info(f"🔍 Using keywords parameter: {keywords}")
+        elif not keywords or not keywords.strip():
+            logger.info(f"📋 Blank search - returning recent awards without keyword filter")
         
         return payload
     
@@ -571,8 +574,8 @@ class FPDSService:
             filters["award_ids"] = [contract_number.upper()]
             logger.info(f"🔍 Using PIID filter for contract number: {contract_number}")
         
-        # Add agency filter using the correct USASpending.gov format
-        if awarding_agency and awarding_agency.strip() and awarding_agency.lower() not in ['none', '']:
+        # Add agency filter only if provided and not empty
+        if awarding_agency and awarding_agency.strip() and awarding_agency.lower() not in ['none', '', 'all']:
             filters["agencies"] = [{
                 "type": "awarding",
                 "tier": "toptier",
