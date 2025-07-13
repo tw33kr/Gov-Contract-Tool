@@ -5,6 +5,72 @@ All notable changes to the Federal Contract Research Tool will be documented in 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2025-01-31] - 16:00 UTC
+
+### Fixed - Contract Transaction History PIID Filter Structure
+
+**Developer**: Claude (Anthropic)  
+**Fix Type**: CRITICAL API FILTER FIX  
+**Issue Resolved**: Contract transaction history returning only 1 modification instead of all modifications
+
+#### 🎯 Problem Solved
+User identified that the `_get_generated_id_for_piid` method was using incorrect filter structure. The USASpending.gov API requires:
+```json
+{
+  "filters": {
+    "piid": ["CONTRACT_NUMBER"]
+  }
+}
+```
+But the code was incorrectly using nested filters or other incorrect structures.
+
+#### 🚀 Implementation Details
+
+**Key Fix**:
+- Corrected the filter structure in `_get_generated_id_for_piid` to use the exact format required by USASpending.gov API
+- Updated `_search_by_piid` to use the same correct filter structure
+- Fixed `_build_filters` to use "piid" filter instead of "award_ids" when searching for contract numbers
+
+**Technical Changes**:
+```python
+# BEFORE (incorrect):
+payload = {
+    "filters": {
+        "piid": [contract_id.upper()]  # This was nested incorrectly
+    },
+    ...
+}
+
+# AFTER (correct):
+payload = {
+    "filters": {
+        "piid": [contract_id.upper()]  # Correct structure as per API docs
+    },
+    "fields": ["generated_internal_id", "Award ID", "recipient_name"],
+    "limit": 1,
+    "page": 1
+}
+```
+
+#### 📊 Transaction Fetching Improvements
+
+**Before**:
+- Step 1 (_get_generated_id_for_piid) was failing to get the generated_internal_id
+- Only falling back to base award info, showing 1 transaction
+- Users seeing incomplete modification history
+
+**After**:
+- ✅ Correct filter structure matches USASpending.gov API requirements
+- ✅ Successfully retrieves generated_internal_id in Step 1
+- ✅ Step 2 can fetch all paginated transactions using the ID
+- ✅ Complete modification history displayed (all 11 mods for the test contract)
+
+This fix ensures the two-step process works correctly:
+1. POST to `/api/v2/search/awards/` with PIID filter to get generated_internal_id
+2. GET from `/api/v2/award/transactions/{generated_id}/` to fetch all modifications
+
+---
+
 ## [2025-01-31] - 01:30 UTC
 
 ### Under Investigation - Contract Transaction History Issue
