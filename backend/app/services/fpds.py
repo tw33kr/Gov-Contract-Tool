@@ -20,6 +20,8 @@ class FPDSService:
         self.transaction_url = "https://api.usaspending.gov/api/v2/search/spending_by_transaction"
         # New endpoint for award details
         self.award_url = "https://api.usaspending.gov/api/v2/awards/"
+        # USASpending API constraints
+        self.earliest_searchable_date = "2007-10-01"
         self.init_database()
     
     def init_database(self):
@@ -256,7 +258,7 @@ class FPDSService:
                     "award_type_codes": ["A", "B", "C", "D"],
                     "award_ids": [piid.upper()],  # Use award_ids filter for PIID
                     "time_period": [{
-                        "start_date": "2007-10-01",  # USASpending earliest searchable date
+                        "start_date": self.earliest_searchable_date,  # Use class constant
                         "end_date": datetime.now().strftime("%Y-%m-%d")
                     }]
                 },
@@ -329,7 +331,7 @@ class FPDSService:
                     "award_type_codes": ["A", "B", "C", "D"],
                     "award_ids": [contract_id.upper()],  # Use award_ids for specific PIID
                     "time_period": [{
-                        "start_date": "2007-10-01",  # USASpending earliest searchable date
+                        "start_date": self.earliest_searchable_date,  # Use class constant
                         "end_date": datetime.now().strftime("%Y-%m-%d")
                     }]
                 },
@@ -561,6 +563,41 @@ class FPDSService:
         
         return payload
     
+    def _validate_date(self, date_str: Optional[str], is_start_date: bool = True) -> Optional[str]:
+        """
+        Validate and adjust dates to meet USASpending API constraints
+        
+        Args:
+            date_str: Date string in YYYY-MM-DD format
+            is_start_date: Whether this is a start date (True) or end date (False)
+            
+        Returns:
+            Validated date string or None
+        """
+        if not date_str:
+            return None
+            
+        try:
+            # Parse the date
+            parsed_date = datetime.strptime(date_str, "%Y-%m-%d")
+            
+            # Check against API constraints
+            earliest_date = datetime.strptime(self.earliest_searchable_date, "%Y-%m-%d")
+            
+            if parsed_date < earliest_date:
+                logger.warning(f"⚠️ Date {date_str} is before API limit. Adjusting to {self.earliest_searchable_date}")
+                return self.earliest_searchable_date
+            
+            # Don't allow future dates for end date
+            if not is_start_date and parsed_date > datetime.now():
+                return datetime.now().strftime("%Y-%m-%d")
+                
+            return date_str
+            
+        except ValueError:
+            logger.error(f"❌ Invalid date format: {date_str}")
+            return None
+    
     def _build_filters(self, keywords: Optional[str], awarding_agency: Optional[str], 
                       award_date_from: Optional[str], award_date_to: Optional[str],
                       contract_number: Optional[str] = None) -> Dict[str, Any]:
@@ -583,26 +620,32 @@ class FPDSService:
             }]
             logger.info(f"🏛️ Adding agency filter: {awarding_agency}")
         
-        # Add time period filter
+        # Add time period filter with proper validation
         if contract_number:
             # For contract searches, use wider date range but within API limits
             filters["time_period"] = [{
-                "start_date": "2007-10-01",  # USASpending earliest searchable date
+                "start_date": self.earliest_searchable_date,
                 "end_date": datetime.now().strftime("%Y-%m-%d")
             }]
-            logger.info("📅 Using extended time period for contract search (from 2007-10-01)")
+            logger.info(f"📅 Using extended time period for contract search (from {self.earliest_searchable_date})")
         elif award_date_from or award_date_to:
-            # Use provided dates or default to recent period
+            # Validate and adjust dates
             if not award_date_from:
                 # Default to 90 days ago if no from date
                 award_date_from = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
+            else:
+                # Validate the from date
+                award_date_from = self._validate_date(award_date_from, is_start_date=True)
+                if not award_date_from:
+                    award_date_from = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
+            
             if not award_date_to:
                 award_date_to = datetime.now().strftime("%Y-%m-%d")
-            
-            # Ensure dates are not before API limit
-            if award_date_from < "2007-10-01":
-                logger.warning(f"⚠️ Adjusting start date from {award_date_from} to 2007-10-01 (API limit)")
-                award_date_from = "2007-10-01"
+            else:
+                # Validate the to date
+                award_date_to = self._validate_date(award_date_to, is_start_date=False)
+                if not award_date_to:
+                    award_date_to = datetime.now().strftime("%Y-%m-%d")
             
             filters["time_period"] = [{
                 "start_date": award_date_from,
