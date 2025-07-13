@@ -5,6 +5,78 @@ All notable changes to the Federal Contract Research Tool will be documented in 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2025-07-12] - 18:30 UTC
+
+### Fixed - USASpending API Date Validation Error (422 Response)
+
+**Developer**: Claude (Anthropic)  
+**Fix Type**: API DATE CONSTRAINT FIX  
+**Issue Resolved**: Contract searches returning 422 error due to dates before USASpending API's earliest searchable date
+
+#### 🎯 Problem Solved
+User reported that searching for specific contract numbers like "36C10B23N10010013" was resulting in a 422 error from the USASpending API. The error message indicated: "start_date falls before the earliest available search date of 2007-10-01". The system was attempting to use "2000-01-01" as the start date for contract searches, which violated the API's constraints.
+
+#### 🚀 Implementation Details
+
+**Key Fixes**:
+1. Added `earliest_searchable_date` constant to FPDSService class set to "2007-10-01"
+2. Created `_validate_date()` method to check and adjust dates against API constraints
+3. Updated all date range logic to respect the API's minimum date requirement
+4. Modified `_search_by_piid()` and `get_contract_transactions()` to use the class constant
+
+**Technical Changes**:
+```python
+# Added class constant for API constraint
+self.earliest_searchable_date = "2007-10-01"
+
+# New date validation method
+def _validate_date(self, date_str: Optional[str], is_start_date: bool = True) -> Optional[str]:
+    if not date_str:
+        return None
+    
+    parsed_date = datetime.strptime(date_str, "%Y-%m-%d")
+    earliest_date = datetime.strptime(self.earliest_searchable_date, "%Y-%m-%d")
+    
+    if parsed_date < earliest_date:
+        logger.warning(f"⚠️ Date {date_str} is before API limit. Adjusting to {self.earliest_searchable_date}")
+        return self.earliest_searchable_date
+    
+    return date_str
+
+# Updated filter building to use validated dates
+if contract_number:
+    filters["time_period"] = [{
+        "start_date": self.earliest_searchable_date,  # No longer uses "2000-01-01"
+        "end_date": datetime.now().strftime("%Y-%m-%d")
+    }]
+```
+
+#### 📊 Search Behavior Improvements
+
+**Before**:
+- Contract searches used "2000-01-01" as start date
+- API returned 422 error for dates before 2007-10-01
+- Contract searches failed completely
+
+**After**:
+- ✅ All date ranges automatically adjusted to respect API constraints
+- ✅ Contract searches use 2007-10-01 as minimum date
+- ✅ User-provided dates before 2007-10-01 are automatically adjusted
+- ✅ Clear warning logs when dates are adjusted
+- ✅ Contract searches now complete successfully
+
+**API Error Fixed**:
+```
+{"detail":"start_date falls before the earliest available search date of 2007-10-01.  
+For data going back to 2000-10-01, use either the Custom Award Download feature on the 
+website or one of our download or bulk_download API endpoints listed on 
+https://api.usaspending.gov/docs/endpoints."}
+```
+
+This fix ensures all searches respect the USASpending API's date constraints, preventing 422 errors and allowing successful contract lookups.
+
+---
+
 ## [2025-07-12] - 17:45 UTC
 
 ### Fixed - Contract Awards Search Keyword Parameter and API Compatibility
