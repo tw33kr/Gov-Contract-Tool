@@ -20,8 +20,10 @@ class FPDSService:
         self.transaction_url = "https://api.usaspending.gov/api/v2/search/spending_by_transaction"
         # New endpoint for award details
         self.award_url = "https://api.usaspending.gov/api/v2/awards/"
-        # Detailed transaction endpoint
-        self.detailed_transaction_url = "https://api.usaspending.gov/api/v2/award/transaction/contract/"
+        # Search awards endpoint for getting generated_internal_id
+        self.search_awards_url = "https://api.usaspending.gov/api/v2/search/awards/"
+        # Detailed transaction endpoint using generated_id
+        self.award_transactions_url = "https://api.usaspending.gov/api/v2/award/transactions/"
         # USASpending API constraints
         self.earliest_searchable_date = "2007-10-01"
         self.init_database()
@@ -316,32 +318,62 @@ class FPDSService:
     
     def _get_generated_id_for_piid(self, contract_id: str) -> Optional[str]:
         """
-        Get the generated_internal_id for a given PIID
+        Get the generated_internal_id for a given PIID using the search/awards endpoint
         This is step 1 of the two-step process for getting detailed transactions
         """
         logger.info(f"🔍 Step 1: Getting generated_internal_id for PIID: {contract_id}")
         
-        # Search for the award to get its generated_internal_id
-        awards = self._search_by_piid(contract_id)
-        
-        if awards and len(awards) > 0:
-            award = awards[0]
-            generated_id = award.get('generated_internal_id')
-            if generated_id:
-                logger.info(f"✅ Found generated_internal_id: {generated_id}")
-                return generated_id
+        try:
+            # Use the search/awards endpoint to get generated_internal_id
+            payload = {
+                "filters": {
+                    "piid": [contract_id.upper()]
+                },
+                "fields": ["generated_internal_id", "Award ID", "recipient_name"],
+                "limit": 1,
+                "page": 1
+            }
+            
+            logger.info(f"📡 Searching for generated_internal_id at: {self.search_awards_url}")
+            logger.info(f"📋 Payload: {json.dumps(payload, indent=2)}")
+            
+            response = requests.post(
+                self.search_awards_url,
+                json=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": "Federal-Contract-Research-Tool/1.0"
+                },
+                timeout=60
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                results = data.get('results', [])
+                
+                if results and len(results) > 0:
+                    result = results[0]
+                    generated_id = result.get('generated_internal_id')
+                    if generated_id:
+                        logger.info(f"✅ Found generated_internal_id: {generated_id}")
+                        return generated_id
+                    else:
+                        logger.warning(f"⚠️ Award found but no generated_internal_id in response: {result}")
+                else:
+                    logger.warning(f"⚠️ No results found for PIID: {contract_id}")
             else:
-                logger.warning(f"⚠️ Award found but no generated_internal_id present")
-        else:
-            logger.warning(f"⚠️ No award found for PIID: {contract_id}")
+                logger.error(f"❌ Error getting generated_internal_id: {response.status_code}")
+                logger.error(f"Response: {response.text[:500]}")
+                
+        except Exception as e:
+            logger.error(f"❌ Error in _get_generated_id_for_piid: {str(e)}")
         
         return None
     
     def _get_detailed_transactions(self, generated_id: str) -> List[Dict[str, Any]]:
         """
         Get detailed transaction history using the generated_internal_id
-        This is step 2 of the two-step process
-        Properly handles pagination to get ALL transactions
+        This is step 2 of the two-step process using the correct endpoint
         """
         logger.info(f"🔍 Step 2: Getting detailed transactions for generated_id: {generated_id}")
         
@@ -353,12 +385,13 @@ class FPDSService:
         while has_next and page <= max_pages:
             try:
                 # Build the URL with the generated_id
-                url = f"{self.detailed_transaction_url}{generated_id}/"
+                url = f"{self.award_transactions_url}{generated_id}/"
                 
-                # API requires these parameters in the URL, not as query params
+                # Parameters for pagination
                 params = {
                     "page": page,
-                    "limit": 10  # API limit is 10 per page
+                    "limit": 50,  # Higher limit for this endpoint
+                    "sort": "-action_date"  # Sort by action date descending
                 }
                 
                 logger.info(f"📡 Fetching page {page} from: {url}")
@@ -384,10 +417,10 @@ class FPDSService:
                     
                     # Check if there's a next page
                     page_metadata = data.get('page_metadata', {})
-                    has_next = page_metadata.get('has_next_page', False)
+                    has_next = page_metadata.get('hasNext', False)
                     total = page_metadata.get('total', 0)
                     
-                    logger.info(f"📊 Page metadata: has_next={has_next}, total={total}, current_count={len(all_transactions)}")
+                    logger.info(f"📊 Page metadata: hasNext={has_next}, total={total}, current_count={len(all_transactions)}")
                     
                     if has_next:
                         page += 1
@@ -411,8 +444,8 @@ class FPDSService:
         """
         Get detailed transaction history for a specific contract
         Uses a two-step process:
-        1. Get the generated_internal_id for the PIID
-        2. Use the generated_internal_id to fetch detailed transactions
+        1. Get the generated_internal_id for the PIID using search/awards endpoint
+        2. Use the generated_internal_id to fetch detailed transactions from award/transactions endpoint
         
         Args:
             contract_id: The contract ID (PIID) to get transactions for
@@ -423,7 +456,7 @@ class FPDSService:
         logger.info(f"📊 Fetching transaction history for contract: {contract_id}")
         
         try:
-            # Step 1: Get the generated_internal_id
+            # Step 1: Get the generated_internal_id using search/awards endpoint
             generated_id = self._get_generated_id_for_piid(contract_id)
             
             if not generated_id:
@@ -431,7 +464,7 @@ class FPDSService:
                 # Fall back to base award info
                 return self._get_base_award_info(contract_id)
             
-            # Step 2: Get detailed transactions using the generated_internal_id
+            # Step 2: Get detailed transactions using the award/transactions endpoint
             transactions_data = self._get_detailed_transactions(generated_id)
             
             if not transactions_data:
@@ -453,7 +486,7 @@ class FPDSService:
                         # Compare by date first, then by amount if dates are equal
                         if (processed_tx['award_date'] > existing['award_date'] or 
                             (processed_tx['award_date'] == existing['award_date'] and 
-                             (processed_tx.get('award_amount', 0) or 0) > (existing.get('award_amount', 0) or 0))):
+                             (processed_tx.get('total_value', 0) or 0) > (existing.get('total_value', 0) or 0))):
                             mod_dict[mod_num] = processed_tx
                     else:
                         mod_dict[mod_num] = processed_tx
@@ -474,10 +507,20 @@ class FPDSService:
             
             processed_transactions.sort(key=sort_key)
             
+            # Calculate individual amounts from cumulative totals
+            if len(processed_transactions) > 1:
+                for i in range(len(processed_transactions) - 1, 0, -1):
+                    current_total = processed_transactions[i].get('total_value', 0) or 0
+                    prev_total = processed_transactions[i-1].get('total_value', 0) or 0
+                    
+                    # The award_amount should be the difference
+                    if current_total and prev_total:
+                        processed_transactions[i]['award_amount'] = current_total - prev_total
+            
             # Log the processed transactions
             logger.info(f"📋 Processed {len(processed_transactions)} unique modifications from {len(transactions_data)} total transactions")
             for tx in processed_transactions:
-                logger.info(f"  - {tx['mod_number']}: ${tx.get('award_amount', 0):,.2f} on {tx.get('award_date', 'N/A')}")
+                logger.info(f"  - {tx['mod_number']}: ${tx.get('award_amount', 0):,.2f} on {tx.get('award_date', 'N/A')} (Total: ${tx.get('total_value', 0):,.2f})")
             
             return processed_transactions
                 
