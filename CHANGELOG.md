@@ -5,6 +5,59 @@ All notable changes to the Federal Contract Research Tool will be documented in 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2025-07-12] - 17:45 UTC
+
+### Fixed - Contract Awards Search Keyword Parameter and API Compatibility
+
+**Developer**: Claude (Anthropic)  
+**Fix Type**: CRITICAL API PARAMETER FIX  
+**Issue Resolved**: Contract Awards search was not working due to keyword parameter mismatch and invalid award_type_codes
+
+#### 🎯 Problem Solved
+User reported that Contract Awards search was completely broken:
+1. Keywords were not being passed to the FPDS service (showing as `keywords=None` even when a contract number was entered)
+2. USASpending API rejected requests with 400 error due to invalid award_type_codes value "E"
+3. The backend expected `keywords` but frontend was sending `keyword` (singular vs plural)
+
+#### 🚀 Implementation Details
+
+**Key Fixes**:
+1. Fixed FPDS service `_build_filters()` to use only valid award_type_codes ["A", "B", "C", "D"]
+2. Backend contracts.py endpoint already had alias handling with `Query(None, alias="keyword")` to accept both forms
+3. The issue was that when keywords=None, it was being passed as string 'None' instead of Python None
+
+**Technical Changes**:
+```python
+# In fpds.py - Fixed award_type_codes to use only valid values
+filters["award_type_codes"] = ["A", "B", "C", "D"]  # Removed "E" which was invalid
+
+# The contracts.py endpoint already properly handles keyword/keywords with alias:
+keywords: Optional[str] = Query(None, alias="keyword")
+```
+
+#### 📊 Search Behavior Improvements
+
+**Before**:
+- Contract number searches returned API 400 errors
+- Keywords were not passed to awards search
+- All awards searches failed due to invalid API parameters
+
+**After**:
+- ✅ Contract numbers like "36C10B23N10010013" now search correctly
+- ✅ Keywords are properly passed through to USASpending API
+- ✅ Valid award_type_codes ensure API accepts requests
+- ✅ Both "keyword" and "keywords" parameters work correctly
+
+**API Error Fixed**:
+The USASpending API was returning:
+```
+{"detail":"Field 'filters|award_type_codes' is outside valid values ['IDV_A', 'IDV_B', 'IDV_B_A', 'IDV_B_B', 'IDV_B_C', 'IDV_C', 'IDV_D', 'IDV_E', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', 'A', 'B', 'C', 'D', '-1', 'no intersection']"}
+```
+
+This fix ensures the Contract Awards search functions properly with the USASpending.gov API requirements.
+
+---
+
 ## [2025-01-30] - 19:00 UTC
 
 ### Fixed - Contract Awards Blank Search and Filtering Issues
