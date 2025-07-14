@@ -172,9 +172,20 @@ class FPDSService:
                 piid_results = self._search_by_piid(contract_number)
                 if piid_results:
                     logger.info(f"✅ Found {len(piid_results)} results for PIID: {contract_number}")
-                    return piid_results
-                else:
-                    logger.info(f"⚠️ No results found for PIID search, falling back to keyword search")
+                    # Add confidence scores and filter
+                    for result in piid_results:
+                        result['confidence'] = self._calculate_confidence(contract_number, result)
+                    
+                    # Sort by confidence
+                    piid_results.sort(key=lambda x: x.get('confidence', 0), reverse=True)
+                    
+                    # Only return high confidence matches (>0.7)
+                    high_confidence_results = [r for r in piid_results if r.get('confidence', 0) > 0.7]
+                    if high_confidence_results:
+                        logger.info(f"🎯 Returning {len(high_confidence_results)} high confidence matches")
+                        return high_confidence_results
+                    else:
+                        logger.info(f"⚠️ No high confidence matches found, continuing with broader search")
             
             # Build the request payload
             payload = self._build_payload(keywords, awarding_agency, award_date_from, award_date_to, limit, contract_number, vendor_name)
@@ -224,13 +235,17 @@ class FPDSService:
                     # Sort by confidence
                     processed_awards.sort(key=lambda x: x.get('confidence', 0), reverse=True)
                     
-                    # If highest confidence is > 0.5, return only that result
-                    if processed_awards[0].get('confidence', 0) > 0.5:
-                        logger.info(f"🎯 High confidence match found: {processed_awards[0]['award_id']} (confidence: {processed_awards[0]['confidence']:.2f})")
-                        return [processed_awards[0]]
+                    # Filter to only return high confidence matches (>0.5)
+                    high_confidence_awards = [a for a in processed_awards if a.get('confidence', 0) > 0.5]
+                    
+                    if high_confidence_awards:
+                        logger.info(f"🎯 Found {len(high_confidence_awards)} high confidence matches for contract number")
+                        # Return only the top matches
+                        return high_confidence_awards[:min(10, len(high_confidence_awards))]
                     else:
-                        logger.info(f"📋 Multiple potential matches found, returning top {min(10, len(processed_awards))} by confidence")
-                        return processed_awards[:10]  # Return top 10 by confidence
+                        logger.info(f"⚠️ No high confidence matches found in general search")
+                        # Return top 5 results even if low confidence
+                        return processed_awards[:5]
                 
                 # Cache the results
                 if processed_awards:
