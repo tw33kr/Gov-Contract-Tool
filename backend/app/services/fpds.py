@@ -143,6 +143,7 @@ class FPDSService:
                      awarding_agency: Optional[str] = None,
                      award_date_from: Optional[str] = None,
                      award_date_to: Optional[str] = None,
+                     vendor_name: Optional[str] = None,
                      limit: int = 50) -> List[Dict[str, Any]]:
         """
         Search for federal contract awards using USASpending.gov API
@@ -152,12 +153,13 @@ class FPDSService:
             awarding_agency: Name of the awarding agency
             award_date_from: Start date (YYYY-MM-DD format)
             award_date_to: End date (YYYY-MM-DD format)
+            vendor_name: Filter by vendor/recipient name
             limit: Maximum number of results
             
         Returns:
             List of award dictionaries
         """
-        logger.info(f"🔍 Searching for awards with params: keywords='{keywords}', agency='{awarding_agency}', limit={limit}")
+        logger.info(f"🔍 Searching for awards with params: keywords='{keywords}', agency='{awarding_agency}', vendor='{vendor_name}', limit={limit}")
         logger.info(f"📅 Date range: {award_date_from} to {award_date_to}")
         
         # Check if keywords contain a contract number
@@ -175,7 +177,7 @@ class FPDSService:
                     logger.info(f"⚠️ No results found for PIID search, falling back to keyword search")
             
             # Build the request payload
-            payload = self._build_payload(keywords, awarding_agency, award_date_from, award_date_to, limit, contract_number)
+            payload = self._build_payload(keywords, awarding_agency, award_date_from, award_date_to, limit, contract_number, vendor_name)
             
             logger.info(f"📡 USASpending.gov API request: {self.base_url}")
             logger.info(f"📋 Request payload: {json.dumps(payload, indent=2)}")
@@ -778,12 +780,13 @@ class FPDSService:
     
     def _build_payload(self, keywords: Optional[str], awarding_agency: Optional[str], 
                       award_date_from: Optional[str], award_date_to: Optional[str], 
-                      limit: int, contract_number: Optional[str] = None) -> Dict[str, Any]:
+                      limit: int, contract_number: Optional[str] = None,
+                      vendor_name: Optional[str] = None) -> Dict[str, Any]:
         """
         Build the complete USASpending.gov API payload with proper filter structure
         """
         # Build filters
-        filters = self._build_filters(keywords, awarding_agency, award_date_from, award_date_to, contract_number)
+        filters = self._build_filters(keywords, awarding_agency, award_date_from, award_date_to, contract_number, vendor_name)
         
         # Build the complete payload
         payload = {
@@ -860,7 +863,8 @@ class FPDSService:
     
     def _build_filters(self, keywords: Optional[str], awarding_agency: Optional[str], 
                       award_date_from: Optional[str], award_date_to: Optional[str],
-                      contract_number: Optional[str] = None) -> Dict[str, Any]:
+                      contract_number: Optional[str] = None,
+                      vendor_name: Optional[str] = None) -> Dict[str, Any]:
         """
         Build the filters object according to USASpending API specification
         """
@@ -870,6 +874,11 @@ class FPDSService:
         if contract_number:
             filters["piid"] = [contract_number.upper()]  # Use piid filter, not award_ids
             logger.info(f"🔍 Using PIID filter for contract number: {contract_number}")
+        
+        # Add vendor/recipient filter if specified
+        if vendor_name and vendor_name.strip():
+            filters["recipient_search_text"] = [vendor_name.strip()]
+            logger.info(f"🏢 Adding recipient filter: {vendor_name}")
         
         # Add agency filter only if provided and not empty
         if awarding_agency and awarding_agency.strip() and awarding_agency.lower() not in ['none', '', 'all']:
@@ -937,19 +946,25 @@ class FPDSService:
                 self._logged_structure = True
             
             # Handle different possible field names and structures from the API
-            # Extract PIID first as it's the most important
+            # Extract PIID first as it's the most important - check all possible field names
             piid = (
                 award.get("piid") or 
                 award.get("PIID") or 
                 award.get("Award ID") or 
                 award.get("award_id") or
+                award.get("Award Id") or
+                award.get("award_id_piid") or
                 ""
             )
+            
+            # If still no PIID, log the available fields to debug
+            if not piid:
+                logger.warning(f"⚠️ No PIID found in award. Available fields: {list(award.keys())[:10]}")
             
             award_id = piid or award.get("generated_internal_id") or f"award-{id(award)}"
             
             # Extract generated_internal_id - this is critical for transaction lookups
-            generated_internal_id = award.get("generated_internal_id")
+            generated_internal_id = award.get("generated_internal_id") or award.get("internal_id")
             
             recipient_name = (
                 award.get("Recipient Name") or 
