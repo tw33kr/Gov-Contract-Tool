@@ -174,7 +174,8 @@ class FPDSService:
                 # FIXED: award_ids should be an array of strings, not objects
                 payload = {
                     "filters": {
-                        "award_ids": [contract_number.upper()]  # Just the PIID string
+                        "award_ids": [contract_number.upper()],  # Just the PIID string
+                        "award_type_codes": ["A", "B", "C", "D"]  # REQUIRED field
                     },
                     "fields": [
                         "Award ID",
@@ -371,10 +372,11 @@ class FPDSService:
             
             for variation in variations:
                 # Use the proper filter structure for PIID search
-                # FIXED: award_ids should be an array of strings
+                # FIXED: award_ids should be an array of strings AND include award_type_codes
                 payload = {
                     "filters": {
-                        "award_ids": [variation]  # Just the PIID string
+                        "award_ids": [variation],  # Just the PIID string
+                        "award_type_codes": ["A", "B", "C", "D"]  # REQUIRED field
                     },
                     "fields": [
                         "Award ID",
@@ -451,10 +453,11 @@ class FPDSService:
         
         try:
             # Use the CORRECT filter structure
-            # FIXED: award_ids should be an array of strings
+            # FIXED: award_ids should be an array of strings AND include award_type_codes
             payload = {
                 "filters": {
-                    "award_ids": [contract_id.upper()]  # Just the PIID string
+                    "award_ids": [contract_id.upper()],  # Just the PIID string
+                    "award_type_codes": ["A", "B", "C", "D"]  # REQUIRED field
                 },
                 "fields": ["generated_internal_id", "internal_id", "Award ID", "piid", "recipient_name"],
                 "limit": 1,
