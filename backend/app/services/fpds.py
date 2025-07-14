@@ -173,36 +173,22 @@ class FPDSService:
                 if piid_results:
                     logger.info(f"✅ Found {len(piid_results)} results for PIID: {contract_number}")
                     
-                    # For contract number searches, check for exact match first
-                    exact_match = None
-                    for result in piid_results:
-                        result_piid = str(result.get('piid', '')).upper()
-                        result_award_id = str(result.get('award_id', '')).upper()
-                        search_upper = contract_number.upper()
-                        
-                        # Check for exact match (with or without dashes)
-                        if (result_piid == search_upper or 
-                            result_piid.replace('-', '') == search_upper.replace('-', '') or
-                            result_award_id == search_upper or 
-                            result_award_id.replace('-', '') == search_upper.replace('-', '')):
-                            exact_match = result
-                            logger.info(f"🎯 Found exact match for contract number: {contract_number}")
-                            break
-                    
-                    # If we have an exact match, return only that
-                    if exact_match:
-                        exact_match['confidence'] = 1.0
-                        return [exact_match]
-                    
-                    # Otherwise, calculate confidence scores
+                    # Add confidence scores
                     for result in piid_results:
                         result['confidence'] = self._calculate_confidence(contract_number, result)
                     
                     # Sort by confidence
                     piid_results.sort(key=lambda x: x.get('confidence', 0), reverse=True)
                     
-                    # Return all results for contract searches (user expects specific contract)
-                    return piid_results
+                    # Only return high confidence matches (>0.7) for contract searches
+                    high_confidence_results = [r for r in piid_results if r.get('confidence', 0) > 0.7]
+                    if high_confidence_results:
+                        logger.info(f"🎯 Returning {len(high_confidence_results)} high-confidence matches (>0.7)")
+                        return high_confidence_results
+                    else:
+                        # If no high confidence matches, return top 5 anyway for debugging
+                        logger.warning(f"⚠️ No high-confidence matches found, returning top {min(5, len(piid_results))} results")
+                        return piid_results[:5]
             
             # For vendor searches, use the spending_by_award endpoint with recipient filter
             if vendor_name and not keywords:
@@ -283,9 +269,16 @@ class FPDSService:
                     # Sort by confidence
                     processed_awards.sort(key=lambda x: x.get('confidence', 0), reverse=True)
                     
-                    # For contract searches, return all results but limit to reasonable number
-                    # Don't filter too aggressively as user expects specific results
-                    return processed_awards[:min(20, len(processed_awards))]
+                    # Filter by confidence threshold
+                    high_confidence_awards = [a for a in processed_awards if a.get('confidence', 0) > 0.5]
+                    
+                    if high_confidence_awards:
+                        # Return only high confidence matches
+                        return high_confidence_awards[:min(10, len(high_confidence_awards))]
+                    else:
+                        # If no high confidence matches, return top 5 anyway
+                        logger.warning(f"⚠️ No high-confidence matches found in general search, returning top 5")
+                        return processed_awards[:5]
                 
                 # Cache the results
                 if processed_awards:
