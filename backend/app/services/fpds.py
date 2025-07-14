@@ -166,57 +166,10 @@ class FPDSService:
         contract_number = self._detect_contract_number(keywords)
         
         try:
-            # If contract number detected, try specific PIID search first
+            # If contract number detected, skip PIID search and go straight to general search
+            # The general search will filter results properly
             if contract_number:
-                logger.info(f"🎯 Detected contract number, trying specific PIID search: {contract_number}")
-                piid_results = self._search_by_piid(contract_number)
-                if piid_results:
-                    logger.info(f"✅ Found {len(piid_results)} results for PIID: {contract_number}")
-                    
-                    # For contract number searches, check for exact match
-                    exact_matches = []
-                    for result in piid_results:
-                        result_piid = str(result.get('piid', '')).upper()
-                        result_award_id = str(result.get('award_id', '')).upper()
-                        search_upper = contract_number.upper()
-                        
-                        # Remove delimiters for comparison
-                        result_piid_clean = result_piid.replace('-', '').replace(' ', '')
-                        result_award_id_clean = result_award_id.replace('-', '').replace(' ', '')
-                        search_clean = search_upper.replace('-', '').replace(' ', '')
-                        
-                        # Check for exact match (with or without dashes/spaces)
-                        if (result_piid == search_upper or 
-                            result_piid_clean == search_clean or
-                            result_award_id == search_upper or 
-                            result_award_id_clean == search_clean):
-                            exact_matches.append(result)
-                            logger.info(f"🎯 Found exact match for contract number: {contract_number}")
-                    
-                    # If we have exact matches, return only the single best match
-                    if exact_matches:
-                        # If multiple exact matches (rare but possible), return the one with highest amount
-                        if len(exact_matches) > 1:
-                            exact_matches.sort(key=lambda x: x.get('award_amount', 0) or 0, reverse=True)
-                            logger.info(f"🎯 Multiple exact matches found, returning highest value award")
-                        return [exact_matches[0]]  # Return only the single best match
-                    
-                    # If no exact matches but we have results from PIID search
-                    # Calculate confidence scores and only return very high confidence matches
-                    for result in piid_results:
-                        result['confidence'] = self._calculate_confidence(contract_number, result)
-                    
-                    # Sort by confidence
-                    piid_results.sort(key=lambda x: x.get('confidence', 0), reverse=True)
-                    
-                    # For contract searches, only return if confidence is very high (>0.95)
-                    if piid_results and piid_results[0].get('confidence', 0) > 0.95:
-                        logger.info(f"🎯 Returning single high-confidence match (confidence: {piid_results[0]['confidence']:.2f})")
-                        return [piid_results[0]]
-                    else:
-                        # No high confidence matches, return empty
-                        logger.warning(f"⚠️ No exact or high-confidence matches found for contract number: {contract_number}")
-                        return []
+                logger.info(f"🎯 Detected contract number: {contract_number}")
             
             # For vendor searches, use the spending_by_award endpoint with recipient filter
             if vendor_name and not keywords:
@@ -284,9 +237,13 @@ class FPDSService:
                 
                 # Process and return the awards
                 processed_awards = []
-                for award in awards_data:
+                for idx, award in enumerate(awards_data):
                     processed_award = self._process_award_data(award)
                     if processed_award:
+                        # Debug: log first few PIIDs to see what we're getting
+                        if idx < 5 and contract_number:
+                            logger.info(f"   Award {idx+1} PIID: {processed_award.get('piid', 'N/A')}")
+                        
                         # Add confidence score if searching for contract number
                         if contract_number:
                             processed_award['confidence'] = self._calculate_confidence(contract_number, processed_award)
@@ -306,27 +263,31 @@ class FPDSService:
                         award_id_clean = award_id.replace('-', '').replace(' ', '')
                         search_clean = search_upper.replace('-', '').replace(' ', '')
                         
+                        # Debug logging
+                        if award_piid_clean == search_clean:
+                            logger.info(f"🎯 Found exact PIID match: {award_piid}")
+                        
                         if (award_piid == search_upper or 
                             award_piid_clean == search_clean or
                             award_id == search_upper or 
                             award_id_clean == search_clean):
                             exact_matches.append(award)
+                            logger.info(f"🎯 Found exact match for contract number: {contract_number}")
                     
                     if exact_matches:
                         # Return only the single best exact match
                         if len(exact_matches) > 1:
                             exact_matches.sort(key=lambda x: x.get('award_amount', 0) or 0, reverse=True)
+                        logger.info(f"🎯 Returning single exact match")
                         return [exact_matches[0]]
                     
-                    # If no exact matches, sort by confidence and return only if very high confidence
-                    processed_awards.sort(key=lambda x: x.get('confidence', 0), reverse=True)
+                    # If no exact matches, log what we found
+                    logger.warning(f"⚠️ No exact matches found for contract number: {contract_number}")
+                    if processed_awards:
+                        logger.info(f"   Top result PIID: {processed_awards[0].get('piid', 'N/A')} (confidence: {processed_awards[0].get('confidence', 0):.2f})")
                     
-                    # Only return if confidence is above 0.95 for contract searches
-                    if processed_awards and processed_awards[0].get('confidence', 0) > 0.95:
-                        return [processed_awards[0]]
-                    else:
-                        logger.warning(f"⚠️ No exact matches found for contract number in general search: {contract_number}")
-                        return []
+                    # For contract number searches, return empty if no exact match
+                    return []
                 
                 # Cache the results
                 if processed_awards:
