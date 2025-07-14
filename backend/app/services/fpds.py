@@ -174,7 +174,7 @@ class FPDSService:
                 filters = {
                     "award_type_codes": ["A", "B", "C", "D"],  # Contract types
                     "time_period": [{
-                        "start_date": "2000-01-01",  # Extended date range for older contracts
+                        "start_date": self.earliest_searchable_date,  # Use API-supported date
                         "end_date": datetime.now().strftime("%Y-%m-%d")
                     }]
                 }
@@ -382,7 +382,7 @@ class FPDSService:
                     "filters": {
                         "award_type_codes": ["A", "B", "C", "D"],  # REQUIRED field
                         "time_period": [{
-                            "start_date": "2000-01-01",  # Extended range for older contracts
+                            "start_date": self.earliest_searchable_date,  # Use API-supported date
                             "end_date": datetime.now().strftime("%Y-%m-%d")
                         }]
                     },
@@ -466,7 +466,7 @@ class FPDSService:
                 "filters": {
                     "award_type_codes": ["A", "B", "C", "D"],  # REQUIRED field
                     "time_period": [{
-                        "start_date": "2000-01-01",
+                        "start_date": self.earliest_searchable_date,  # Use API-supported date
                         "end_date": datetime.now().strftime("%Y-%m-%d")
                     }]
                 },
