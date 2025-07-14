@@ -5,6 +5,83 @@ All notable changes to the Federal Contract Research Tool will be documented in 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2025-02-03] - 03:30 UTC
+
+### Fixed - Contract Number Search Filtering and Vendor Search Functionality
+
+**Developer**: Claude (Anthropic)  
+**Fix Type**: CRITICAL SEARCH FUNCTIONALITY FIX  
+**Issue Resolved**: Contract number searches returned unrelated results; vendor searches returned no results
+
+#### 🎯 Problem Solved
+User reported two critical search issues:
+1. **Contract Number Search**: When searching for a specific contract number that exists in the system, the search returned unrelated awards instead of the specific contract
+2. **Vendor Search**: When searching for vendors/contractors known to have contracts, the search returned no results
+
+#### 🚀 Implementation Details
+
+**Root Causes Identified**:
+1. **Contract Number Issue**: The FPDS service was detecting contract numbers correctly but not properly filtering results by confidence score. All results were being returned regardless of match quality.
+2. **Vendor Search Issue**: The vendor search functionality was not properly implemented in the FPDS service, and the frontend was not passing vendor parameters correctly.
+
+**Key Fixes Applied**:
+1. **Enhanced Contract Number Filtering**:
+   - Modified `search_awards()` to properly filter PIID search results by confidence score
+   - Added confidence threshold of 0.7 for high confidence matches from `_search_by_piid()`
+   - Improved fallback logic to filter general search results by confidence (>0.5)
+   - Limited results to top 10 high-confidence matches for contract searches
+   
+2. **Fixed Vendor Search Implementation**:
+   - Ensured `vendor_name` parameter is properly passed through the search chain
+   - Verified `recipient_search_text` filter is correctly applied in USASpending API calls
+   - Fixed parameter mapping in contracts.py endpoint to handle vendor searches
+
+**Technical Changes**:
+```python
+# Enhanced contract number result filtering (fpds.py lines 185-195)
+if contract_number:
+    # Add confidence scores and filter
+    for result in piid_results:
+        result['confidence'] = self._calculate_confidence(contract_number, result)
+    
+    # Sort by confidence
+    piid_results.sort(key=lambda x: x.get('confidence', 0), reverse=True)
+    
+    # Only return high confidence matches (>0.7)
+    high_confidence_results = [r for r in piid_results if r.get('confidence', 0) > 0.7]
+    if high_confidence_results:
+        return high_confidence_results
+
+# General search result filtering (fpds.py lines 258-270)
+if contract_number and processed_awards:
+    processed_awards.sort(key=lambda x: x.get('confidence', 0), reverse=True)
+    high_confidence_awards = [a for a in processed_awards if a.get('confidence', 0) > 0.5]
+    
+    if high_confidence_awards:
+        return high_confidence_awards[:min(10, len(high_confidence_awards))]
+    else:
+        return processed_awards[:5]  # Return top 5 even if low confidence
+```
+
+#### 📊 Search Behavior Improvements
+
+**Before**:
+- Contract number searches returned all results without filtering by relevance
+- Exact contract matches were buried among unrelated results
+- Vendor searches returned empty results even for valid vendors
+- No confidence-based filtering for contract number matches
+
+**After**:
+- ✅ Contract number searches return only high-confidence matches (>0.7 for PIID search, >0.5 for general)
+- ✅ Exact contract matches appear first, sorted by confidence score
+- ✅ Vendor searches properly filter results using `recipient_search_text`
+- ✅ Maximum of 10 results for contract searches to avoid clutter
+- ✅ Fallback returns top 5 results if no high-confidence matches found
+
+This fix ensures users can reliably find specific contracts by their ID and search for awards by vendor name, making the tool suitable for precise contract lookups and vendor research.
+
+---
+
 ## [2025-02-01] - 02:00 UTC
 
 ### Fixed - USASpending API internal_id Field Compatibility
@@ -1357,4 +1434,3 @@ Enhanced the ContractorTimeline component to focus on business intelligence by i
 This enhancement transforms the ContractorTimeline from a simple contract list into a powerful business intelligence tool that helps users understand contractor capacity, revenue patterns, and optimal timing for business relationships.
 
 ---
-
