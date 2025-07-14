@@ -172,22 +172,70 @@ class FPDSService:
                 piid_results = self._search_by_piid(contract_number)
                 if piid_results:
                     logger.info(f"✅ Found {len(piid_results)} results for PIID: {contract_number}")
-                    # Add confidence scores and filter
+                    
+                    # For contract number searches, check for exact match first
+                    exact_match = None
+                    for result in piid_results:
+                        result_piid = str(result.get('piid', '')).upper()
+                        result_award_id = str(result.get('award_id', '')).upper()
+                        search_upper = contract_number.upper()
+                        
+                        # Check for exact match (with or without dashes)
+                        if (result_piid == search_upper or 
+                            result_piid.replace('-', '') == search_upper.replace('-', '') or
+                            result_award_id == search_upper or 
+                            result_award_id.replace('-', '') == search_upper.replace('-', '')):
+                            exact_match = result
+                            logger.info(f"🎯 Found exact match for contract number: {contract_number}")
+                            break
+                    
+                    # If we have an exact match, return only that
+                    if exact_match:
+                        exact_match['confidence'] = 1.0
+                        return [exact_match]
+                    
+                    # Otherwise, calculate confidence scores
                     for result in piid_results:
                         result['confidence'] = self._calculate_confidence(contract_number, result)
                     
                     # Sort by confidence
                     piid_results.sort(key=lambda x: x.get('confidence', 0), reverse=True)
                     
-                    # Only return high confidence matches (>0.7)
-                    high_confidence_results = [r for r in piid_results if r.get('confidence', 0) > 0.7]
-                    if high_confidence_results:
-                        logger.info(f"🎯 Returning {len(high_confidence_results)} high confidence matches")
-                        return high_confidence_results
-                    else:
-                        logger.info(f"⚠️ No high confidence matches found, continuing with broader search")
+                    # Return all results for contract searches (user expects specific contract)
+                    return piid_results
             
-            # Build the request payload
+            # For vendor searches, use the spending_by_award endpoint with recipient filter
+            if vendor_name and not keywords:
+                logger.info(f"🏢 Vendor-only search for: {vendor_name}")
+                # Build payload specifically for vendor search
+                payload = self._build_payload(None, awarding_agency, award_date_from, award_date_to, limit, None, vendor_name)
+                
+                # Make the API request
+                response = requests.post(
+                    self.base_url,
+                    json=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "User-Agent": "Federal-Contract-Research-Tool/1.0"
+                    },
+                    timeout=60
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    awards_data = data.get('results', [])
+                    logger.info(f"✅ Found {len(awards_data)} awards for vendor: {vendor_name}")
+                    
+                    # Process the awards
+                    processed_awards = []
+                    for award in awards_data:
+                        processed_award = self._process_award_data(award)
+                        if processed_award:
+                            processed_awards.append(processed_award)
+                    
+                    return processed_awards
+            
+            # Build the request payload for general search
             payload = self._build_payload(keywords, awarding_agency, award_date_from, award_date_to, limit, contract_number, vendor_name)
             
             logger.info(f"📡 USASpending.gov API request: {self.base_url}")
@@ -235,17 +283,9 @@ class FPDSService:
                     # Sort by confidence
                     processed_awards.sort(key=lambda x: x.get('confidence', 0), reverse=True)
                     
-                    # Filter to only return high confidence matches (>0.5)
-                    high_confidence_awards = [a for a in processed_awards if a.get('confidence', 0) > 0.5]
-                    
-                    if high_confidence_awards:
-                        logger.info(f"🎯 Found {len(high_confidence_awards)} high confidence matches for contract number")
-                        # Return only the top matches
-                        return high_confidence_awards[:min(10, len(high_confidence_awards))]
-                    else:
-                        logger.info(f"⚠️ No high confidence matches found in general search")
-                        # Return top 5 results even if low confidence
-                        return processed_awards[:5]
+                    # For contract searches, return all results but limit to reasonable number
+                    # Don't filter too aggressively as user expects specific results
+                    return processed_awards[:min(20, len(processed_awards))]
                 
                 # Cache the results
                 if processed_awards:
@@ -273,58 +313,74 @@ class FPDSService:
         Search specifically by PIID using the correct USASpending API approach
         """
         try:
-            # CORRECTED: Use the proper filter structure for PIID search
-            payload = {
-                "filters": {
-                    "piid": [piid.upper()]  # This is the correct way to filter by PIID
-                },
-                "fields": [
-                    "Award ID",
-                    "piid",
-                    "Recipient Name", 
-                    "Award Amount",
-                    "Total Outlays",
-                    "Start Date",
-                    "End Date",
-                    "Awarding Agency",
-                    "Awarding Sub Agency",
-                    "Award Type",
-                    "Description",
-                    "generated_internal_id",
-                    "internal_id"  # Add this line
-                ],
-                "page": 1,
-                "limit": 10,
-                "sort": "Award Amount",
-                "order": "desc"
-            }
+            # Try multiple variations of the contract number
+            variations = [
+                piid.upper(),  # Original uppercase
+                piid.upper().replace('-', ''),  # Without dashes
+                piid.upper().replace(' ', ''),  # Without spaces
+            ]
             
-            logger.info(f"📡 PIID-specific search request to USASpending API")
-            logger.info(f"📋 Payload: {json.dumps(payload, indent=2)}")
+            all_results = []
+            seen_awards = set()  # Track unique awards to avoid duplicates
             
-            response = requests.post(
-                self.search_awards_url,  # Use the search/awards endpoint
-                json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "User-Agent": "Federal-Contract-Research-Tool/1.0"
-                },
-                timeout=60
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                awards_data = data.get('results', [])
+            for variation in variations:
+                # Use the proper filter structure for PIID search
+                payload = {
+                    "filters": {
+                        "piid": [variation]  # This is the correct way to filter by PIID
+                    },
+                    "fields": [
+                        "Award ID",
+                        "piid",
+                        "Recipient Name", 
+                        "Award Amount",
+                        "Total Outlays",
+                        "Start Date",
+                        "End Date",
+                        "Awarding Agency",
+                        "Awarding Sub Agency",
+                        "Award Type",
+                        "Description",
+                        "generated_internal_id",
+                        "internal_id"
+                    ],
+                    "page": 1,
+                    "limit": 10,
+                    "sort": "Award Amount",
+                    "order": "desc"
+                }
                 
-                if awards_data:
-                    processed_awards = []
-                    for award in awards_data:
-                        processed_award = self._process_award_data(award)
-                        if processed_award:
-                            processed_awards.append(processed_award)
-                    return processed_awards
+                logger.info(f"📡 PIID-specific search for variation: {variation}")
+                
+                response = requests.post(
+                    self.search_awards_url,  # Use the search/awards endpoint
+                    json=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "User-Agent": "Federal-Contract-Research-Tool/1.0"
+                    },
+                    timeout=60
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    awards_data = data.get('results', [])
                     
-            return []
+                    if awards_data:
+                        for award in awards_data:
+                            processed_award = self._process_award_data(award)
+                            if processed_award:
+                                # Use a unique identifier to avoid duplicates
+                                award_key = f"{processed_award.get('piid', '')}-{processed_award.get('award_id', '')}"
+                                if award_key not in seen_awards:
+                                    seen_awards.add(award_key)
+                                    all_results.append(processed_award)
+                
+                # If we found exact matches, don't try more variations
+                if all_results:
+                    break
+            
+            return all_results
             
         except Exception as e:
             logger.error(f"❌ Error in PIID search: {str(e)}")
@@ -833,7 +889,7 @@ class FPDSService:
         
         # Only use keywords if NOT a contract number and NOT empty
         # For blank searches, we want to return all recent awards
-        if keywords and keywords.strip() and keywords.lower() not in ['none', ''] and not contract_number:
+        if keywords and keywords.strip() and keywords.lower() not in ['none', ''] and not contract_number and not vendor_name:
             payload["keywords"] = [keywords.strip()]
             logger.info(f"🔍 Using keywords parameter: {keywords}")
         elif not keywords or not keywords.strip():
@@ -892,8 +948,9 @@ class FPDSService:
         
         # Add vendor/recipient filter if specified
         if vendor_name and vendor_name.strip():
+            # Use recipient_search_text for vendor searches
             filters["recipient_search_text"] = [vendor_name.strip()]
-            logger.info(f"🏢 Adding recipient filter: {vendor_name}")
+            logger.info(f"🏢 Adding recipient filter for vendor search: {vendor_name}")
         
         # Add agency filter only if provided and not empty
         if awarding_agency and awarding_agency.strip() and awarding_agency.lower() not in ['none', '', 'all']:
@@ -937,7 +994,7 @@ class FPDSService:
             }]
             logger.info(f"📅 Adding time period filter: {award_date_from} to {award_date_to}")
         else:
-            # Default to last 90 days for blank searches
+            # Default to last 90 days for blank searches or vendor searches
             filters["time_period"] = [{
                 "start_date": (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d"), 
                 "end_date": datetime.now().strftime("%Y-%m-%d")
