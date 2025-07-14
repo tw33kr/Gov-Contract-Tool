@@ -73,7 +73,7 @@ async def search_contracts(
     Search for federal contract opportunities and optionally include awards
     """
     try:
-        logger.info(f"🔍 GET search request: keywords={keywords}, agency={agency}, include_awards={include_awards}")
+        logger.info(f"🔍 GET search request: keywords={keywords}, agency={agency}, vendor={vendor_name}, include_awards={include_awards}")
         
         # Call SAM service which handles both opportunities and awards internally
         opportunities, awards = sam_service.search_contracts(
@@ -83,21 +83,13 @@ async def search_contracts(
             set_aside=set_aside,
             posted_from=posted_from,
             posted_to=posted_to,
+            vendor_name=vendor_name,  # Pass vendor_name to sam_service
             limit=limit,
             include_awards=include_awards
         )
         
-        # Apply additional filtering for awards if needed
+        # Apply additional filtering for awards if needed (for amount range)
         if include_awards and awards:
-            # Filter by vendor name if specified (post-processing)
-            if vendor_name:
-                vendor_name_lower = vendor_name.lower()
-                awards = [
-                    award for award in awards 
-                    if vendor_name_lower in award.get('recipient_name', '').lower()
-                ]
-                logger.info(f"🔍 Filtered awards by vendor name '{vendor_name}': {len(awards)} results")
-            
             # Filter by amount range if specified (post-processing)
             if min_amount is not None or max_amount is not None:
                 filtered_awards = []
@@ -164,6 +156,7 @@ async def search_contracts_post(request: SearchRequest):
             set_aside=request.set_aside,
             posted_from=getattr(request, 'posted_date_from', getattr(request, 'posted_from', None)),
             posted_to=getattr(request, 'posted_date_to', getattr(request, 'posted_to', None)),
+            vendor_name=getattr(request, 'vendor_name', None),  # Add vendor_name support
             limit=request.limit,
             include_awards=request.include_awards
         )
