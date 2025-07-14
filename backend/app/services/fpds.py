@@ -166,7 +166,7 @@ class FPDSService:
         contract_number = self._detect_contract_number(keywords)
         
         try:
-            # For contract number searches, use keywords approach (not award_ids)
+            # For contract number searches, use a specific approach
             if contract_number:
                 logger.info(f"🎯 Detected contract number: {contract_number}")
                 
@@ -179,7 +179,11 @@ class FPDSService:
                     }]
                 }
                 
-                # Build the payload using keywords instead of award_ids
+                # For contract number searches, use the award_id field in filters
+                # This is the correct way to search for specific contract numbers
+                filters["award_ids"] = [contract_number.upper()]
+                
+                # Build the payload without keywords for exact match
                 payload = {
                     "filters": filters,
                     "fields": [
@@ -197,7 +201,6 @@ class FPDSService:
                         "generated_internal_id",
                         "internal_id"
                     ],
-                    "keywords": [contract_number.upper()],  # Use keywords for contract search
                     "page": 1,
                     "limit": 100,  # Increase limit to find the contract
                     "sort": "Award Amount",
@@ -205,7 +208,7 @@ class FPDSService:
                 }
                 
                 logger.info(f"📡 USASpending.gov API request: {self.search_awards_url}")
-                logger.info(f"📋 Using keywords search for contract: {contract_number}")
+                logger.info(f"📋 Using award_ids filter for exact contract match: {contract_number}")
                 
                 # Make the API request to spending_by_award endpoint
                 response = requests.post(
@@ -239,6 +242,33 @@ class FPDSService:
                                 logger.info(f"   Result {idx+1}: PIID={processed_award.get('piid', 'N/A')}, confidence={processed_award['confidence']:.2f}")
                             
                             processed_awards.append(processed_award)
+                    
+                    # If no exact matches found with award_ids, try with keywords as fallback
+                    if not processed_awards:
+                        logger.info(f"⚠️ No exact match found with award_ids filter, trying keywords approach...")
+                        # Remove award_ids and use keywords instead
+                        del filters["award_ids"]
+                        payload["keywords"] = [contract_number.upper()]
+                        
+                        response = requests.post(
+                            self.search_awards_url,
+                            json=payload,
+                            headers={
+                                "Content-Type": "application/json",
+                                "User-Agent": "Federal-Contract-Research-Tool/1.0"
+                            },
+                            timeout=60
+                        )
+                        
+                        if response.status_code == 200:
+                            data = response.json()
+                            awards_data = data.get('results', [])
+                            
+                            for award in awards_data:
+                                processed_award = self._process_award_data(award)
+                                if processed_award:
+                                    processed_award['confidence'] = self._calculate_confidence(contract_number, processed_award)
+                                    processed_awards.append(processed_award)
                     
                     # Filter for exact matches
                     exact_matches = []
@@ -363,7 +393,7 @@ class FPDSService:
     
     def _search_by_piid(self, piid: str) -> List[Dict[str, Any]]:
         """
-        Search specifically by PIID using the keywords approach
+        Search specifically by PIID using the award_ids filter
         """
         try:
             # Try multiple variations of the contract number
@@ -377,14 +407,15 @@ class FPDSService:
             seen_awards = set()  # Track unique awards to avoid duplicates
             
             for variation in variations:
-                # Use keywords search instead of award_ids
+                # Use award_ids filter for exact match
                 payload = {
                     "filters": {
                         "award_type_codes": ["A", "B", "C", "D"],  # REQUIRED field
                         "time_period": [{
                             "start_date": self.earliest_searchable_date,  # Use API-supported date
                             "end_date": datetime.now().strftime("%Y-%m-%d")
-                        }]
+                        }],
+                        "award_ids": [variation]  # Use award_ids for exact match
                     },
                     "fields": [
                         "Award ID",
@@ -401,7 +432,6 @@ class FPDSService:
                         "generated_internal_id",
                         "internal_id"
                     ],
-                    "keywords": [variation],  # Use keywords instead of award_ids
                     "page": 1,
                     "limit": 100,
                     "sort": "Award Amount",
@@ -455,29 +485,29 @@ class FPDSService:
     
     def _get_generated_id_for_piid(self, contract_id: str) -> Optional[str]:
         """
-        Get the generated_internal_id for a given PIID using keywords search
+        Get the generated_internal_id for a given PIID using award_ids filter
         This is step 1 of the two-step process for getting detailed transactions
         """
         logger.info(f"🔍 Step 1: Getting generated_internal_id for PIID: {contract_id}")
         
         try:
-            # Use keywords search instead of award_ids
+            # Use award_ids filter for exact match
             payload = {
                 "filters": {
                     "award_type_codes": ["A", "B", "C", "D"],  # REQUIRED field
                     "time_period": [{
                         "start_date": self.earliest_searchable_date,  # Use API-supported date
                         "end_date": datetime.now().strftime("%Y-%m-%d")
-                    }]
+                    }],
+                    "award_ids": [contract_id.upper()]  # Use award_ids for exact match
                 },
                 "fields": ["generated_internal_id", "internal_id", "Award ID", "piid", "recipient_name"],
-                "keywords": [contract_id.upper()],  # Use keywords instead of award_ids
                 "limit": 100,
                 "page": 1
             }
             
             logger.info(f"📡 POST to: {self.search_awards_url}")
-            logger.info(f"📋 Using keywords search for PIID: {contract_id}")
+            logger.info(f"📋 Using award_ids filter for PIID: {contract_id}")
             
             response = requests.post(
                 self.search_awards_url,
@@ -627,7 +657,7 @@ class FPDSService:
         """
         Get detailed transaction history for a specific contract
         Uses a two-step process:
-        1. Get the generated_internal_id for the PIID using keywords search
+        1. Get the generated_internal_id for the PIID using award_ids filter
         2. Use the generated_internal_id to fetch detailed transactions from award/transactions endpoint
         
         Args:
@@ -1016,8 +1046,8 @@ class FPDSService:
         """
         filters = {}
         
-        # NOTE: We no longer use award_ids filter for contract numbers
-        # Contract numbers are searched using keywords instead
+        # NOTE: We no longer use award_ids filter for contract numbers in general search
+        # Contract numbers are handled separately in the search_awards method
         
         # Add vendor/recipient filter if specified
         if vendor_name and vendor_name.strip():
