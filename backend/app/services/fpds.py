@@ -166,26 +166,109 @@ class FPDSService:
         contract_number = self._detect_contract_number(keywords)
         
         try:
-            # For contract number searches, use a specific approach
+            # For contract number searches, use multiple search strategies
             if contract_number:
                 logger.info(f"🎯 Detected contract number: {contract_number}")
                 
-                # Build filters for contract search
+                # Strategy 1: Try direct PIID search first
+                logger.info("📋 Strategy 1: Direct PIID search")
+                results = self._search_by_direct_piid(contract_number)
+                if results:
+                    logger.info(f"✅ Found {len(results)} results with direct PIID search")
+                    return results
+                
+                # Strategy 2: Try with award_ids filter
+                logger.info("📋 Strategy 2: Using award_ids filter")
                 filters = {
-                    "award_type_codes": ["A", "B", "C", "D"],  # Contract types
+                    "award_type_codes": ["A", "B", "C", "D"],
                     "time_period": [{
-                        "start_date": self.earliest_searchable_date,  # Use API-supported date
+                        "start_date": self.earliest_searchable_date,
                         "end_date": datetime.now().strftime("%Y-%m-%d")
                     }]
                 }
                 
-                # For contract number searches, use the award_id field in filters
-                # This is the correct way to search for specific contract numbers
-                filters["award_ids"] = [contract_number.upper()]
+                # Try different variations of the contract number
+                variations = [
+                    contract_number.upper(),
+                    contract_number.upper().replace('-', ''),
+                    contract_number.upper().replace(' ', ''),
+                ]
                 
-                # Build the payload without keywords for exact match
+                for variation in variations:
+                    filters["award_ids"] = [variation]
+                    
+                    payload = {
+                        "filters": filters,
+                        "fields": [
+                            "Award ID",
+                            "piid",
+                            "Recipient Name", 
+                            "Award Amount",
+                            "Total Outlays",
+                            "Start Date",
+                            "End Date",
+                            "Awarding Agency",
+                            "Awarding Sub Agency",
+                            "Award Type",
+                            "Description",
+                            "generated_internal_id",
+                            "internal_id"
+                        ],
+                        "page": 1,
+                        "limit": 100,
+                        "sort": "Award Amount",
+                        "order": "desc"
+                    }
+                    
+                    logger.info(f"📡 Trying variation: {variation}")
+                    
+                    response = requests.post(
+                        self.search_awards_url,
+                        json=payload,
+                        headers={
+                            "Content-Type": "application/json",
+                            "User-Agent": "Federal-Contract-Research-Tool/1.0"
+                        },
+                        timeout=60
+                    )
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        awards_data = data.get('results', [])
+                        
+                        if awards_data:
+                            logger.info(f"✅ Found {len(awards_data)} results with award_ids filter")
+                            processed_awards = []
+                            for award in awards_data:
+                                processed_award = self._process_award_data(award)
+                                if processed_award:
+                                    processed_award['confidence'] = self._calculate_confidence(contract_number, processed_award)
+                                    processed_awards.append(processed_award)
+                            
+                            # Return exact matches if found
+                            exact_matches = [a for a in processed_awards if a.get('confidence', 0) >= 1.0]
+                            if exact_matches:
+                                return [exact_matches[0]]
+                            
+                            # Return high confidence matches
+                            high_confidence = [a for a in processed_awards if a.get('confidence', 0) >= 0.85]
+                            if high_confidence:
+                                high_confidence.sort(key=lambda x: x.get('confidence', 0), reverse=True)
+                                return [high_confidence[0]]
+                
+                # Strategy 3: Try with keywords
+                logger.info("📋 Strategy 3: Using keywords search")
+                filters = {
+                    "award_type_codes": ["A", "B", "C", "D"],
+                    "time_period": [{
+                        "start_date": self.earliest_searchable_date,
+                        "end_date": datetime.now().strftime("%Y-%m-%d")
+                    }]
+                }
+                
                 payload = {
                     "filters": filters,
+                    "keywords": [contract_number.upper()],
                     "fields": [
                         "Award ID",
                         "piid",
@@ -202,15 +285,11 @@ class FPDSService:
                         "internal_id"
                     ],
                     "page": 1,
-                    "limit": 100,  # Increase limit to find the contract
+                    "limit": 100,
                     "sort": "Award Amount",
                     "order": "desc"
                 }
                 
-                logger.info(f"📡 USASpending.gov API request: {self.search_awards_url}")
-                logger.info(f"📋 Using award_ids filter for exact contract match: {contract_number}")
-                
-                # Make the API request to spending_by_award endpoint
                 response = requests.post(
                     self.search_awards_url,
                     json=payload,
@@ -221,83 +300,31 @@ class FPDSService:
                     timeout=60
                 )
                 
-                logger.info(f"📊 API Response Status: {response.status_code}")
-                
                 if response.status_code == 200:
                     data = response.json()
                     awards_data = data.get('results', [])
                     
-                    logger.info(f"✅ Found {len(awards_data)} results for contract number search")
-                    
-                    # Process awards
-                    processed_awards = []
-                    for idx, award in enumerate(awards_data):
-                        processed_award = self._process_award_data(award)
-                        if processed_award:
-                            # Add confidence score for contract number searches
-                            processed_award['confidence'] = self._calculate_confidence(contract_number, processed_award)
-                            
-                            # Debug: log PIID values
-                            if idx < 5:
-                                logger.info(f"   Result {idx+1}: PIID={processed_award.get('piid', 'N/A')}, confidence={processed_award['confidence']:.2f}")
-                            
-                            processed_awards.append(processed_award)
-                    
-                    # If no exact matches found with award_ids, try with keywords as fallback
-                    if not processed_awards:
-                        logger.info(f"⚠️ No exact match found with award_ids filter, trying keywords approach...")
-                        # Remove award_ids and use keywords instead
-                        del filters["award_ids"]
-                        payload["keywords"] = [contract_number.upper()]
+                    if awards_data:
+                        logger.info(f"✅ Found {len(awards_data)} results with keywords search")
+                        processed_awards = []
+                        for award in awards_data:
+                            processed_award = self._process_award_data(award)
+                            if processed_award:
+                                processed_award['confidence'] = self._calculate_confidence(contract_number, processed_award)
+                                processed_awards.append(processed_award)
                         
-                        response = requests.post(
-                            self.search_awards_url,
-                            json=payload,
-                            headers={
-                                "Content-Type": "application/json",
-                                "User-Agent": "Federal-Contract-Research-Tool/1.0"
-                            },
-                            timeout=60
-                        )
+                        # Filter and return best matches
+                        exact_matches = [a for a in processed_awards if a.get('confidence', 0) >= 1.0]
+                        if exact_matches:
+                            return [exact_matches[0]]
                         
-                        if response.status_code == 200:
-                            data = response.json()
-                            awards_data = data.get('results', [])
-                            
-                            for award in awards_data:
-                                processed_award = self._process_award_data(award)
-                                if processed_award:
-                                    processed_award['confidence'] = self._calculate_confidence(contract_number, processed_award)
-                                    processed_awards.append(processed_award)
-                    
-                    # Filter for exact matches
-                    exact_matches = []
-                    for award in processed_awards:
-                        if award.get('confidence', 0) >= 1.0:  # Only exact matches
-                            exact_matches.append(award)
-                            logger.info(f"🎯 Found exact match: PIID={award.get('piid')}")
-                    
-                    if exact_matches:
-                        # Return only the best exact match
-                        if len(exact_matches) > 1:
-                            # Sort by award amount to get the most significant
-                            exact_matches.sort(key=lambda x: x.get('award_amount', 0) or 0, reverse=True)
-                        logger.info(f"🎯 Returning single exact match for contract {contract_number}")
-                        return [exact_matches[0]]
-                    else:
-                        # If no exact matches but we have high confidence matches, return the best one
                         high_confidence = [a for a in processed_awards if a.get('confidence', 0) >= 0.85]
                         if high_confidence:
                             high_confidence.sort(key=lambda x: x.get('confidence', 0), reverse=True)
-                            logger.info(f"🎯 Returning high confidence match (confidence={high_confidence[0]['confidence']:.2f})")
                             return [high_confidence[0]]
-                        
-                        logger.warning(f"⚠️ No exact or high confidence matches found for contract number: {contract_number}")
-                        return []
-                else:
-                    logger.error(f"❌ USASpending.gov API error: {response.status_code}")
-                    logger.error(f"Response: {response.text[:500]}")
-                    return []
+                
+                logger.warning(f"⚠️ No matches found for contract number: {contract_number}")
+                return []
             
             # For vendor searches, use the spending_by_award endpoint with recipient filter
             if vendor_name and not keywords:
@@ -390,6 +417,36 @@ class FPDSService:
         except Exception as e:
             logger.error(f"❌ Error fetching awards: {str(e)}")
             return []
+    
+    def _search_by_direct_piid(self, piid: str) -> List[Dict[str, Any]]:
+        """
+        Search directly using the awards endpoint with PIID
+        """
+        try:
+            # Try direct award lookup
+            url = f"{self.award_url}{piid}/"
+            logger.info(f"📡 Direct award lookup: {url}")
+            
+            response = requests.get(
+                url,
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": "Federal-Contract-Research-Tool/1.0"
+                },
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                # Process the single award response
+                if data:
+                    processed_award = self._process_award_data(data)
+                    if processed_award:
+                        return [processed_award]
+        except Exception as e:
+            logger.debug(f"Direct PIID lookup failed: {str(e)}")
+        
+        return []
     
     def _search_by_piid(self, piid: str) -> List[Dict[str, Any]]:
         """
