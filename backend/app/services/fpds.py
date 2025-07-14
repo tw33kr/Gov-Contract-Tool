@@ -171,9 +171,10 @@ class FPDSService:
                 logger.info(f"🎯 Detected contract number: {contract_number}")
                 
                 # Use the search/awards endpoint which is more accurate for PIID searches
+                # FIXED: award_ids should be an array of strings, not objects
                 payload = {
                     "filters": {
-                        "award_ids": [{"piid": contract_number.upper()}]
+                        "award_ids": [contract_number.upper()]  # Just the PIID string
                     },
                     "fields": [
                         "Award ID",
@@ -256,6 +257,10 @@ class FPDSService:
                         
                         logger.warning(f"⚠️ No exact or high confidence matches found for contract number: {contract_number}")
                         return []
+                else:
+                    logger.error(f"❌ USASpending.gov API error: {response.status_code}")
+                    logger.error(f"Response: {response.text[:500]}")
+                    return []
             
             # For vendor searches, use the spending_by_award endpoint with recipient filter
             if vendor_name and not keywords:
@@ -366,9 +371,10 @@ class FPDSService:
             
             for variation in variations:
                 # Use the proper filter structure for PIID search
+                # FIXED: award_ids should be an array of strings
                 payload = {
                     "filters": {
-                        "award_ids": [{"piid": variation}]  # Use award_ids filter with piid
+                        "award_ids": [variation]  # Just the PIID string
                     },
                     "fields": [
                         "Award ID",
@@ -445,9 +451,10 @@ class FPDSService:
         
         try:
             # Use the CORRECT filter structure
+            # FIXED: award_ids should be an array of strings
             payload = {
                 "filters": {
-                    "award_ids": [{"piid": contract_id.upper()}]  # Use award_ids filter
+                    "award_ids": [contract_id.upper()]  # Just the PIID string
                 },
                 "fields": ["generated_internal_id", "internal_id", "Award ID", "piid", "recipient_name"],
                 "limit": 1,
@@ -993,8 +1000,8 @@ class FPDSService:
         
         # If contract number detected, use award_ids filter with proper format
         if contract_number:
-            # USASpending API expects award_ids to be a list of dictionaries with 'piid' key
-            filters["award_ids"] = [{"piid": contract_number.upper()}]
+            # FIXED: USASpending API expects award_ids to be a list of strings
+            filters["award_ids"] = [contract_number.upper()]
             logger.info(f"🔍 Using award_ids filter for contract number: {contract_number}")
         
         # Add vendor/recipient filter if specified
