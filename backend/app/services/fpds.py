@@ -166,17 +166,22 @@ class FPDSService:
         contract_number = self._detect_contract_number(keywords)
         
         try:
-            # For contract number searches, use the spending_by_award endpoint with award_ids filter
+            # For contract number searches, use keywords approach (not award_ids)
             if contract_number:
                 logger.info(f"🎯 Detected contract number: {contract_number}")
                 
-                # Use the spending_by_award endpoint which supports award_ids filter
-                # FIXED: award_ids should be an array of strings, not objects
+                # Build filters for contract search
+                filters = {
+                    "award_type_codes": ["A", "B", "C", "D"],  # Contract types
+                    "time_period": [{
+                        "start_date": "2000-01-01",  # Extended date range for older contracts
+                        "end_date": datetime.now().strftime("%Y-%m-%d")
+                    }]
+                }
+                
+                # Build the payload using keywords instead of award_ids
                 payload = {
-                    "filters": {
-                        "award_ids": [contract_number.upper()],  # Just the PIID string
-                        "award_type_codes": ["A", "B", "C", "D"]  # REQUIRED field
-                    },
+                    "filters": filters,
                     "fields": [
                         "Award ID",
                         "piid",
@@ -192,14 +197,15 @@ class FPDSService:
                         "generated_internal_id",
                         "internal_id"
                     ],
+                    "keywords": [contract_number.upper()],  # Use keywords for contract search
                     "page": 1,
-                    "limit": 10,
+                    "limit": 100,  # Increase limit to find the contract
                     "sort": "Award Amount",
                     "order": "desc"
                 }
                 
                 logger.info(f"📡 USASpending.gov API request: {self.search_awards_url}")
-                logger.info(f"📋 Request payload: {json.dumps(payload, indent=2)}")
+                logger.info(f"📋 Using keywords search for contract: {contract_number}")
                 
                 # Make the API request to spending_by_award endpoint
                 response = requests.post(
@@ -357,7 +363,7 @@ class FPDSService:
     
     def _search_by_piid(self, piid: str) -> List[Dict[str, Any]]:
         """
-        Search specifically by PIID using the correct USASpending API approach
+        Search specifically by PIID using the keywords approach
         """
         try:
             # Try multiple variations of the contract number
@@ -371,12 +377,14 @@ class FPDSService:
             seen_awards = set()  # Track unique awards to avoid duplicates
             
             for variation in variations:
-                # Use the proper filter structure for PIID search
-                # FIXED: award_ids should be an array of strings AND include award_type_codes
+                # Use keywords search instead of award_ids
                 payload = {
                     "filters": {
-                        "award_ids": [variation],  # Just the PIID string
-                        "award_type_codes": ["A", "B", "C", "D"]  # REQUIRED field
+                        "award_type_codes": ["A", "B", "C", "D"],  # REQUIRED field
+                        "time_period": [{
+                            "start_date": "2000-01-01",  # Extended range for older contracts
+                            "end_date": datetime.now().strftime("%Y-%m-%d")
+                        }]
                     },
                     "fields": [
                         "Award ID",
@@ -393,8 +401,9 @@ class FPDSService:
                         "generated_internal_id",
                         "internal_id"
                     ],
+                    "keywords": [variation],  # Use keywords instead of award_ids
                     "page": 1,
-                    "limit": 10,
+                    "limit": 100,
                     "sort": "Award Amount",
                     "order": "desc"
                 }
@@ -446,26 +455,29 @@ class FPDSService:
     
     def _get_generated_id_for_piid(self, contract_id: str) -> Optional[str]:
         """
-        Get the generated_internal_id for a given PIID using the spending_by_award endpoint
+        Get the generated_internal_id for a given PIID using keywords search
         This is step 1 of the two-step process for getting detailed transactions
         """
         logger.info(f"🔍 Step 1: Getting generated_internal_id for PIID: {contract_id}")
         
         try:
-            # Use the CORRECT filter structure
-            # FIXED: award_ids should be an array of strings AND include award_type_codes
+            # Use keywords search instead of award_ids
             payload = {
                 "filters": {
-                    "award_ids": [contract_id.upper()],  # Just the PIID string
-                    "award_type_codes": ["A", "B", "C", "D"]  # REQUIRED field
+                    "award_type_codes": ["A", "B", "C", "D"],  # REQUIRED field
+                    "time_period": [{
+                        "start_date": "2000-01-01",
+                        "end_date": datetime.now().strftime("%Y-%m-%d")
+                    }]
                 },
                 "fields": ["generated_internal_id", "internal_id", "Award ID", "piid", "recipient_name"],
-                "limit": 1,
+                "keywords": [contract_id.upper()],  # Use keywords instead of award_ids
+                "limit": 100,
                 "page": 1
             }
             
             logger.info(f"📡 POST to: {self.search_awards_url}")
-            logger.info(f"📋 Payload: {json.dumps(payload, indent=2)}")
+            logger.info(f"📋 Using keywords search for PIID: {contract_id}")
             
             response = requests.post(
                 self.search_awards_url,
@@ -486,26 +498,29 @@ class FPDSService:
                 # Debug log the full response
                 logger.info(f"🔍 Step 1 Response: {json.dumps(data, indent=2)[:1000]}")
                 
-                if results and len(results) > 0:
-                    result = results[0]
-                    
-                    # Try to get internal ID from multiple possible fields
-                    internal_id = None
-                    
-                    # First try generated_internal_id
-                    if result.get('generated_internal_id'):
-                        internal_id = result.get('generated_internal_id')
-                        logger.info(f"✅ Found generated_internal_id: {internal_id}")
-                    # Then try internal_id (what the API actually returns)
-                    elif result.get('internal_id'):
-                        internal_id = str(result.get('internal_id'))  # Convert to string if number
-                        logger.info(f"✅ Found internal_id: {internal_id}")
-                    
-                    if internal_id:
-                        logger.info(f"📋 Award details: PIID={result.get('Award ID')}, Recipient={result.get('recipient_name')}")
-                        return internal_id
-                    else:
-                        logger.warning(f"⚠️ Award found but no internal ID in response: {result}")
+                if results:
+                    # Find the exact match
+                    for result in results:
+                        # Check if this is the right contract
+                        result_piid = (result.get('Award ID') or result.get('piid') or '').upper()
+                        if result_piid.replace('-', '') == contract_id.upper().replace('-', ''):
+                            # Try to get internal ID from multiple possible fields
+                            internal_id = None
+                            
+                            # First try generated_internal_id
+                            if result.get('generated_internal_id'):
+                                internal_id = result.get('generated_internal_id')
+                                logger.info(f"✅ Found generated_internal_id: {internal_id}")
+                            # Then try internal_id (what the API actually returns)
+                            elif result.get('internal_id'):
+                                internal_id = str(result.get('internal_id'))  # Convert to string if number
+                                logger.info(f"✅ Found internal_id: {internal_id}")
+                            
+                            if internal_id:
+                                logger.info(f"📋 Award details: PIID={result_piid}, Recipient={result.get('recipient_name')}")
+                                return internal_id
+                            else:
+                                logger.warning(f"⚠️ Award found but no internal ID in response: {result}")
                 else:
                     logger.warning(f"⚠️ No results found for PIID: {contract_id}")
             else:
@@ -612,7 +627,7 @@ class FPDSService:
         """
         Get detailed transaction history for a specific contract
         Uses a two-step process:
-        1. Get the generated_internal_id for the PIID using spending_by_award endpoint
+        1. Get the generated_internal_id for the PIID using keywords search
         2. Use the generated_internal_id to fetch detailed transactions from award/transactions endpoint
         
         Args:
@@ -1001,11 +1016,8 @@ class FPDSService:
         """
         filters = {}
         
-        # If contract number detected, use award_ids filter with proper format
-        if contract_number:
-            # FIXED: USASpending API expects award_ids to be a list of strings
-            filters["award_ids"] = [contract_number.upper()]
-            logger.info(f"🔍 Using award_ids filter for contract number: {contract_number}")
+        # NOTE: We no longer use award_ids filter for contract numbers
+        # Contract numbers are searched using keywords instead
         
         # Add vendor/recipient filter if specified
         if vendor_name and vendor_name.strip():
