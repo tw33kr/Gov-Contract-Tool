@@ -173,22 +173,43 @@ class FPDSService:
                 if piid_results:
                     logger.info(f"✅ Found {len(piid_results)} results for PIID: {contract_number}")
                     
-                    # Add confidence scores
+                    # For contract number searches, check for exact match first
+                    exact_matches = []
+                    for result in piid_results:
+                        result_piid = str(result.get('piid', '')).upper()
+                        result_award_id = str(result.get('award_id', '')).upper()
+                        search_upper = contract_number.upper()
+                        
+                        # Check for exact match (with or without dashes)
+                        if (result_piid == search_upper or 
+                            result_piid.replace('-', '') == search_upper.replace('-', '') or
+                            result_award_id == search_upper or 
+                            result_award_id.replace('-', '') == search_upper.replace('-', '')):
+                            exact_matches.append(result)
+                            logger.info(f"🎯 Found exact match for contract number: {contract_number}")
+                    
+                    # If we have exact matches, return only those
+                    if exact_matches:
+                        # If multiple exact matches (shouldn't happen but just in case), return the one with highest amount
+                        if len(exact_matches) > 1:
+                            exact_matches.sort(key=lambda x: x.get('award_amount', 0), reverse=True)
+                        return [exact_matches[0]]  # Return only the single best match
+                    
+                    # If no exact matches, add confidence scores and filter
                     for result in piid_results:
                         result['confidence'] = self._calculate_confidence(contract_number, result)
                     
                     # Sort by confidence
                     piid_results.sort(key=lambda x: x.get('confidence', 0), reverse=True)
                     
-                    # Only return high confidence matches (>0.7) for contract searches
-                    high_confidence_results = [r for r in piid_results if r.get('confidence', 0) > 0.7]
-                    if high_confidence_results:
-                        logger.info(f"🎯 Returning {len(high_confidence_results)} high-confidence matches (>0.7)")
-                        return high_confidence_results
+                    # Only return the highest confidence match if it's above 0.9
+                    if piid_results and piid_results[0].get('confidence', 0) > 0.9:
+                        logger.info(f"🎯 Returning single high-confidence match (confidence: {piid_results[0]['confidence']:.2f})")
+                        return [piid_results[0]]
                     else:
-                        # If no high confidence matches, return top 5 anyway for debugging
-                        logger.warning(f"⚠️ No high-confidence matches found, returning top {min(5, len(piid_results))} results")
-                        return piid_results[:5]
+                        # No high confidence matches, return empty
+                        logger.warning(f"⚠️ No exact or high-confidence matches found for contract number: {contract_number}")
+                        return []
             
             # For vendor searches, use the spending_by_award endpoint with recipient filter
             if vendor_name and not keywords:
@@ -264,21 +285,36 @@ class FPDSService:
                             processed_award['confidence'] = self._calculate_confidence(contract_number, processed_award)
                         processed_awards.append(processed_award)
                 
-                # If searching for a contract number, filter and sort by confidence
+                # If searching for a contract number, be very strict
                 if contract_number and processed_awards:
-                    # Sort by confidence
+                    # Look for exact matches first
+                    exact_matches = []
+                    for award in processed_awards:
+                        award_piid = str(award.get('piid', '')).upper()
+                        award_id = str(award.get('award_id', '')).upper()
+                        search_upper = contract_number.upper()
+                        
+                        if (award_piid == search_upper or 
+                            award_piid.replace('-', '') == search_upper.replace('-', '') or
+                            award_id == search_upper or 
+                            award_id.replace('-', '') == search_upper.replace('-', '')):
+                            exact_matches.append(award)
+                    
+                    if exact_matches:
+                        # Return only the single best exact match
+                        if len(exact_matches) > 1:
+                            exact_matches.sort(key=lambda x: x.get('award_amount', 0), reverse=True)
+                        return [exact_matches[0]]
+                    
+                    # If no exact matches, sort by confidence and return only if very high confidence
                     processed_awards.sort(key=lambda x: x.get('confidence', 0), reverse=True)
                     
-                    # Filter by confidence threshold
-                    high_confidence_awards = [a for a in processed_awards if a.get('confidence', 0) > 0.5]
-                    
-                    if high_confidence_awards:
-                        # Return only high confidence matches
-                        return high_confidence_awards[:min(10, len(high_confidence_awards))]
+                    # Only return if confidence is above 0.95 for contract searches
+                    if processed_awards and processed_awards[0].get('confidence', 0) > 0.95:
+                        return [processed_awards[0]]
                     else:
-                        # If no high confidence matches, return top 5 anyway
-                        logger.warning(f"⚠️ No high-confidence matches found in general search, returning top 5")
-                        return processed_awards[:5]
+                        logger.warning(f"⚠️ No exact matches found for contract number in general search: {contract_number}")
+                        return []
                 
                 # Cache the results
                 if processed_awards:
