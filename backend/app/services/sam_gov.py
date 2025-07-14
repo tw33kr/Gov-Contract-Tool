@@ -112,6 +112,7 @@ class SAMGovService:
                         set_aside: Optional[str] = None,
                         posted_from: Optional[str] = None,
                         posted_to: Optional[str] = None,
+                        vendor_name: Optional[str] = None,
                         limit: int = 50,
                         include_awards: bool = False) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
@@ -124,13 +125,14 @@ class SAMGovService:
             set_aside: Set-aside type
             posted_from: Posted from date (YYYY-MM-DD)
             posted_to: Posted to date (YYYY-MM-DD)
+            vendor_name: Vendor/recipient name filter
             limit: Maximum number of results
             include_awards: Whether to include awards data
             
         Returns:
             Tuple of (opportunities, awards) lists
         """
-        logger.info(f"🔍 Searching contracts with params: keywords='{keywords}', agency='{agency}', limit={limit}, include_awards={include_awards}")
+        logger.info(f"🔍 Searching contracts with params: keywords='{keywords}', agency='{agency}', vendor='{vendor_name}', limit={limit}, include_awards={include_awards}")
         
         # Auto-detect contract numbers and force awards search
         is_contract_number = self._detect_contract_number(keywords)
@@ -145,7 +147,7 @@ class SAMGovService:
         awards = []
         if include_awards:
             logger.info("🏆 Awards requested - fetching FPDS data...")
-            awards = self._search_awards(keywords, agency, limit)
+            awards = self._search_awards(keywords, agency, vendor_name, limit)
         
         logger.info(f"🔍 Backend search results:")
         logger.info(f"  - Opportunities: {len(opportunities)}")
@@ -280,15 +282,16 @@ class SAMGovService:
             }
         ]
     
-    def _search_awards(self, keywords: Optional[str], agency: Optional[str], limit: int) -> List[Dict[str, Any]]:
+    def _search_awards(self, keywords: Optional[str], agency: Optional[str], vendor_name: Optional[str], limit: int) -> List[Dict[str, Any]]:
         """Search for awards using FPDS service"""
         try:
-            logger.info(f"🔍 Searching for awards with params: keywords='{keywords}', agency='{agency}', limit={limit}")
+            logger.info(f"🔍 Searching for awards with params: keywords='{keywords}', agency='{agency}', vendor='{vendor_name}', limit={limit}")
             
             # Use FPDS service to search awards with proper parameter mapping
             awards = self.fpds_service.search_awards(
                 keywords=keywords,
                 awarding_agency=agency,  # Map agency to awarding_agency
+                vendor_name=vendor_name,  # Pass vendor_name parameter
                 limit=limit
             )
             
