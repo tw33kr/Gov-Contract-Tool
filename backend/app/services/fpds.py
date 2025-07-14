@@ -166,10 +166,73 @@ class FPDSService:
         contract_number = self._detect_contract_number(keywords)
         
         try:
-            # If contract number detected, skip PIID search and go straight to general search
-            # The general search will filter results properly
+            # For contract number searches, try a direct PIID search first
             if contract_number:
                 logger.info(f"🎯 Detected contract number: {contract_number}")
+                
+                # Build payload specifically for contract number search
+                payload = self._build_payload(None, awarding_agency, award_date_from, award_date_to, limit, contract_number, vendor_name)
+                
+                logger.info(f"📡 USASpending.gov API request: {self.base_url}")
+                logger.info(f"📋 Request payload: {json.dumps(payload, indent=2)}")
+                
+                # Make the API request
+                response = requests.post(
+                    self.base_url,
+                    json=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "User-Agent": "Federal-Contract-Research-Tool/1.0"
+                    },
+                    timeout=60
+                )
+                
+                logger.info(f"📊 API Response Status: {response.status_code}")
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    awards_data = data.get('results', [])
+                    
+                    logger.info(f"✅ Found {len(awards_data)} results for contract number search")
+                    
+                    # Process awards
+                    processed_awards = []
+                    for idx, award in enumerate(awards_data):
+                        processed_award = self._process_award_data(award)
+                        if processed_award:
+                            # Add confidence score for contract number searches
+                            processed_award['confidence'] = self._calculate_confidence(contract_number, processed_award)
+                            
+                            # Debug: log PIID values
+                            if idx < 5:
+                                logger.info(f"   Result {idx+1}: PIID={processed_award.get('piid', 'N/A')}, confidence={processed_award['confidence']:.2f}")
+                            
+                            processed_awards.append(processed_award)
+                    
+                    # Filter for exact matches
+                    exact_matches = []
+                    for award in processed_awards:
+                        if award.get('confidence', 0) >= 1.0:  # Only exact matches
+                            exact_matches.append(award)
+                            logger.info(f"🎯 Found exact match: PIID={award.get('piid')}")
+                    
+                    if exact_matches:
+                        # Return only the best exact match
+                        if len(exact_matches) > 1:
+                            # Sort by award amount to get the most significant
+                            exact_matches.sort(key=lambda x: x.get('award_amount', 0) or 0, reverse=True)
+                        logger.info(f"🎯 Returning single exact match for contract {contract_number}")
+                        return [exact_matches[0]]
+                    else:
+                        # If no exact matches but we have high confidence matches, return the best one
+                        high_confidence = [a for a in processed_awards if a.get('confidence', 0) >= 0.85]
+                        if high_confidence:
+                            high_confidence.sort(key=lambda x: x.get('confidence', 0), reverse=True)
+                            logger.info(f"🎯 Returning high confidence match (confidence={high_confidence[0]['confidence']:.2f})")
+                            return [high_confidence[0]]
+                        
+                        logger.warning(f"⚠️ No exact or high confidence matches found for contract number: {contract_number}")
+                        return []
             
             # For vendor searches, use the spending_by_award endpoint with recipient filter
             if vendor_name and not keywords:
@@ -240,54 +303,7 @@ class FPDSService:
                 for idx, award in enumerate(awards_data):
                     processed_award = self._process_award_data(award)
                     if processed_award:
-                        # Debug: log first few PIIDs to see what we're getting
-                        if idx < 5 and contract_number:
-                            logger.info(f"   Award {idx+1} PIID: {processed_award.get('piid', 'N/A')}")
-                        
-                        # Add confidence score if searching for contract number
-                        if contract_number:
-                            processed_award['confidence'] = self._calculate_confidence(contract_number, processed_award)
                         processed_awards.append(processed_award)
-                
-                # If searching for a contract number, be very strict
-                if contract_number and processed_awards:
-                    # Look for exact matches first
-                    exact_matches = []
-                    for award in processed_awards:
-                        award_piid = str(award.get('piid', '')).upper()
-                        award_id = str(award.get('award_id', '')).upper()
-                        search_upper = contract_number.upper()
-                        
-                        # Remove delimiters for comparison
-                        award_piid_clean = award_piid.replace('-', '').replace(' ', '')
-                        award_id_clean = award_id.replace('-', '').replace(' ', '')
-                        search_clean = search_upper.replace('-', '').replace(' ', '')
-                        
-                        # Debug logging
-                        if award_piid_clean == search_clean:
-                            logger.info(f"🎯 Found exact PIID match: {award_piid}")
-                        
-                        if (award_piid == search_upper or 
-                            award_piid_clean == search_clean or
-                            award_id == search_upper or 
-                            award_id_clean == search_clean):
-                            exact_matches.append(award)
-                            logger.info(f"🎯 Found exact match for contract number: {contract_number}")
-                    
-                    if exact_matches:
-                        # Return only the single best exact match
-                        if len(exact_matches) > 1:
-                            exact_matches.sort(key=lambda x: x.get('award_amount', 0) or 0, reverse=True)
-                        logger.info(f"🎯 Returning single exact match")
-                        return [exact_matches[0]]
-                    
-                    # If no exact matches, log what we found
-                    logger.warning(f"⚠️ No exact matches found for contract number: {contract_number}")
-                    if processed_awards:
-                        logger.info(f"   Top result PIID: {processed_awards[0].get('piid', 'N/A')} (confidence: {processed_awards[0].get('confidence', 0):.2f})")
-                    
-                    # For contract number searches, return empty if no exact match
-                    return []
                 
                 # Cache the results
                 if processed_awards:
@@ -952,10 +968,11 @@ class FPDSService:
         """
         filters = {}
         
-        # If contract number detected, use piid filter (CORRECTED)
+        # If contract number detected, use award_ids filter with proper format
         if contract_number:
-            filters["piid"] = [contract_number.upper()]  # Use piid filter, not award_ids
-            logger.info(f"🔍 Using PIID filter for contract number: {contract_number}")
+            # USASpending API expects award_ids to be a list of dictionaries with 'piid' key
+            filters["award_ids"] = [{"piid": contract_number.upper()}]
+            logger.info(f"🔍 Using award_ids filter for contract number: {contract_number}")
         
         # Add vendor/recipient filter if specified
         if vendor_name and vendor_name.strip():
