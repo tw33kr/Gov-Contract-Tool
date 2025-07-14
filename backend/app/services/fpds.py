@@ -166,19 +166,42 @@ class FPDSService:
         contract_number = self._detect_contract_number(keywords)
         
         try:
-            # For contract number searches, try a direct PIID search first
+            # For contract number searches, use the search/awards endpoint for precise results
             if contract_number:
                 logger.info(f"🎯 Detected contract number: {contract_number}")
                 
-                # Build payload specifically for contract number search
-                payload = self._build_payload(None, awarding_agency, award_date_from, award_date_to, limit, contract_number, vendor_name)
+                # Use the search/awards endpoint which is more accurate for PIID searches
+                payload = {
+                    "filters": {
+                        "award_ids": [{"piid": contract_number.upper()}]
+                    },
+                    "fields": [
+                        "Award ID",
+                        "piid",
+                        "Recipient Name", 
+                        "Award Amount",
+                        "Total Outlays",
+                        "Start Date",
+                        "End Date",
+                        "Awarding Agency",
+                        "Awarding Sub Agency",
+                        "Award Type",
+                        "Description",
+                        "generated_internal_id",
+                        "internal_id"
+                    ],
+                    "page": 1,
+                    "limit": 10,
+                    "sort": "Award Amount",
+                    "order": "desc"
+                }
                 
-                logger.info(f"📡 USASpending.gov API request: {self.base_url}")
+                logger.info(f"📡 USASpending.gov API request: {self.search_awards_url}")
                 logger.info(f"📋 Request payload: {json.dumps(payload, indent=2)}")
                 
-                # Make the API request
+                # Make the API request to search/awards endpoint
                 response = requests.post(
-                    self.base_url,
+                    self.search_awards_url,
                     json=payload,
                     headers={
                         "Content-Type": "application/json",
@@ -345,7 +368,7 @@ class FPDSService:
                 # Use the proper filter structure for PIID search
                 payload = {
                     "filters": {
-                        "piid": [variation]  # This is the correct way to filter by PIID
+                        "award_ids": [{"piid": variation}]  # Use award_ids filter with piid
                     },
                     "fields": [
                         "Award ID",
@@ -421,10 +444,10 @@ class FPDSService:
         logger.info(f"🔍 Step 1: Getting generated_internal_id for PIID: {contract_id}")
         
         try:
-            # FIXED: Use the CORRECT filter structure as shown in the user's example
+            # Use the CORRECT filter structure
             payload = {
                 "filters": {
-                    "piid": [contract_id.upper()]  # THIS IS THE CORRECT FORMAT
+                    "award_ids": [{"piid": contract_id.upper()}]  # Use award_ids filter
                 },
                 "fields": ["generated_internal_id", "internal_id", "Award ID", "piid", "recipient_name"],
                 "limit": 1,
