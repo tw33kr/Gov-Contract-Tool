@@ -1,10 +1,39 @@
-# backend/requirements.txt
-fastapi>=0.95.2
-uvicorn[standard]>=0.22.0
-pydantic>=1.10.12
-pandas>=2.0.3
-numpy>=1.24.3
-requests>=2.28.0
-httpx>=0.24.0
-python-multipart>=0.0.6
-aiofiles>=23.1.0
+# Backend Requirements for Gov-Contract-Tool
+# Updated: 7-14-2025
+
+# Core Framework
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+
+# Data Models & Validation
+pydantic==2.5.3
+pydantic-settings==2.1.0
+
+# HTTP Clients
+requests==2.31.0
+httpx==0.25.2
+aiofiles==23.2.1
+
+# Data Processing
+pandas==2.1.4
+numpy==1.26.3
+
+# Database
+# SQLite3 is included with Python, no separate package needed
+
+# Utilities
+python-dateutil==2.8.2
+python-dotenv==1.0.0
+
+# Development Dependencies (optional but recommended)
+pytest==7.4.4
+pytest-asyncio==0.21.1
+black==23.12.1
+flake8==7.0.0
+
+# Logging (included in standard library, but for advanced features)
+# logging is built-in
+
+# Type hints support
+typing-extensions==4.9.0
