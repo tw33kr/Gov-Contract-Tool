@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Any, Tuple
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from ..models import AwardedContract, ContractStatus, ContractVehicle
+from ..models import AwardedContract
 
 logger = logging.getLogger(__name__)
 
@@ -482,49 +482,49 @@ class FPDSService:
             logger.error(f"❌ Error processing award detail: {str(e)}")
             return None
 
-    def _determine_status(self, award_date: Optional[datetime], completion_date: Optional[datetime]) -> ContractStatus:
+    def _determine_status(self, award_date: Optional[datetime], completion_date: Optional[datetime]) -> str:
         """Determine contract status based on dates"""
         if not award_date:
-            return ContractStatus.UNKNOWN
+            return "Unknown"
         
         now = datetime.now()
         if completion_date and completion_date < now:
-            return ContractStatus.COMPLETED
+            return "Completed"
         elif award_date > now:
-            return ContractStatus.PENDING
+            return "Pending"
         else:
-            return ContractStatus.ACTIVE
+            return "Active"
 
-    def _determine_vehicle(self, contract_type: str, award_type: str) -> ContractVehicle:
+    def _determine_vehicle(self, contract_type: str, award_type: str) -> str:
         """Determine contract vehicle from type codes"""
         award_type_upper = (award_type or '').upper()
         
         # Check specific award types
         if award_type_upper in ['A', 'E']:  # BPA or BPA Call
-            return ContractVehicle.BPA
+            return "BPA"
         elif award_type_upper in ['B']:  # Purchase Order
-            return ContractVehicle.PURCHASE_ORDER
+            return "Purchase Order"
         elif award_type_upper in ['C', 'D']:  # Delivery Order or Definitive Contract
-            return ContractVehicle.DEFINITIVE_CONTRACT
+            return "Definitive Contract"
         elif award_type_upper in ['F', 'G', 'H', 'J']:  # Various IDVs
-            return ContractVehicle.IDIQ
+            return "IDIQ"
         
         # Check contract type description
         contract_type_lower = (contract_type or '').lower()
         if 'idiq' in contract_type_lower or 'indefinite' in contract_type_lower:
-            return ContractVehicle.IDIQ
+            return "IDIQ"
         elif 'bpa' in contract_type_lower:
-            return ContractVehicle.BPA
+            return "BPA"
         elif 'purchase order' in contract_type_lower:
-            return ContractVehicle.PURCHASE_ORDER
+            return "Purchase Order"
         elif 'definitive' in contract_type_lower:
-            return ContractVehicle.DEFINITIVE_CONTRACT
+            return "Definitive Contract"
         elif 'gsa' in contract_type_lower or 'schedule' in contract_type_lower:
-            return ContractVehicle.GSA_SCHEDULE
+            return "GSA Schedule"
         elif 'gwac' in contract_type_lower:
-            return ContractVehicle.GWAC
+            return "GWAC"
         
-        return ContractVehicle.OTHER
+        return "Other"
 
     def _parse_date(self, date_str: Optional[str]) -> Optional[datetime]:
         """Parse date string to datetime"""
@@ -621,12 +621,12 @@ class FPDSService:
                 completion_date=self._parse_date(row[5]),
                 award_amount=row[6],
                 total_value=row[7],
-                status=ContractStatus(row[8]) if row[8] else ContractStatus.UNKNOWN,
+                status=row[8] if row[8] else "Unknown",
                 naics_code=row[9] or '',
                 naics_description=row[10] or '',
                 psc_code=row[11] or '',
                 psc_description=row[12] or '',
-                contract_vehicle=ContractVehicle(row[13]) if row[13] else ContractVehicle.OTHER,
+                contract_vehicle=row[13] if row[13] else "Other",
                 set_aside=row[14] or 'None',
                 place_of_performance=row[15] or 'Unknown',
                 competition_type=row[16] or 'Unknown',
@@ -658,12 +658,12 @@ class FPDSService:
                     award.completion_date.isoformat() if award.completion_date else None,
                     award.award_amount,
                     award.total_value,
-                    award.status.value,
+                    award.status,
                     award.naics_code,
                     award.naics_description,
                     award.psc_code,
                     award.psc_description,
-                    award.contract_vehicle.value,
+                    award.contract_vehicle,
                     award.set_aside,
                     award.place_of_performance,
                     award.competition_type,
@@ -740,7 +740,7 @@ class FPDSService:
             # Vehicle distribution
             vehicle_stats = {}
             for award in awards:
-                vehicle = award.contract_vehicle.value
+                vehicle = award.contract_vehicle
                 if vehicle not in vehicle_stats:
                     vehicle_stats[vehicle] = 0
                 vehicle_stats[vehicle] += 1
