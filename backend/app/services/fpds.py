@@ -220,7 +220,7 @@ class FPDSService:
         return []
 
     def _build_search_request(self, **params) -> Dict[str, Any]:
-        """Build USASpending.gov search request"""
+        """Build USASpending.gov search request with improved keyword and agency handling"""
         filters = {
             "award_type_codes": ["A", "B", "C", "D", "E", "F", "IDV_A", "IDV_B", "IDV_C", "IDV_D", "IDV_E"],
             "time_period": [{
@@ -229,28 +229,53 @@ class FPDSService:
             }]
         }
         
-        # Add keyword search
-        if params.get('keyword'):
-            filters["keywords"] = params['keyword'].split()
+        # Add keyword search - ensure it's properly included
+        if params.get('keyword') and params['keyword'].strip():
+            keywords_list = params['keyword'].strip().split()
+            filters["keywords"] = keywords_list
+            logger.info(f"🔍 Adding keywords filter: {keywords_list}")
         
-        # Add agency filter
-        if params.get('agency'):
+        # Add agency filter - ensure it's properly formatted
+        if params.get('agency') and params['agency'].strip():
+            agency_name = params['agency'].strip()
+            # Handle common agency name variations
+            agency_mapping = {
+                'DOD': 'Department of Defense',
+                'VA': 'Department of Veterans Affairs',
+                'HHS': 'Department of Health and Human Services',
+                'NASA': 'National Aeronautics and Space Administration',
+                'DHS': 'Department of Homeland Security',
+                'DOE': 'Department of Energy',
+                'DOT': 'Department of Transportation',
+                'DOJ': 'Department of Justice',
+                'USDA': 'Department of Agriculture',
+                'EPA': 'Environmental Protection Agency'
+            }
+            
+            # Check if we need to map the agency name
+            if agency_name.upper() in agency_mapping:
+                agency_name = agency_mapping[agency_name.upper()]
+                logger.info(f"📌 Mapped agency abbreviation to full name: {agency_name}")
+            
             filters["agencies"] = [{
                 "type": "funding",
                 "tier": "toptier",
-                "name": params['agency']
+                "name": agency_name
             }]
+            logger.info(f"🏛️ Adding agency filter: {agency_name}")
         
         # Add vendor filter
-        if params.get('vendor'):
-            filters["recipient_search_text"] = params['vendor']
+        if params.get('vendor') and params['vendor'].strip():
+            filters["recipient_search_text"] = params['vendor'].strip()
+            logger.info(f"🏢 Adding vendor filter: {params['vendor']}")
         
         # Add NAICS filter
-        if params.get('naics_code'):
-            filters["naics_codes"] = [params['naics_code']]
+        if params.get('naics_code') and params['naics_code'].strip():
+            filters["naics_codes"] = [params['naics_code'].strip()]
+            logger.info(f"📊 Adding NAICS filter: {params['naics_code']}")
         
         # Add set-aside filter
-        if params.get('set_aside'):
+        if params.get('set_aside') and params['set_aside'].strip():
             set_aside_map = {
                 'SBA': ['SBA', 'SB'],
                 'SDVOSBC': ['SDVOSBC', '27'],
@@ -260,6 +285,7 @@ class FPDSService:
             }
             if params['set_aside'] in set_aside_map:
                 filters["type_of_set_aside_code"] = set_aside_map[params['set_aside']]
+                logger.info(f"🎯 Adding set-aside filter: {params['set_aside']}")
         
         # Add amount filter
         if params.get('min_amount') or params.get('max_amount'):
@@ -270,8 +296,9 @@ class FPDSService:
                 award_amounts.append({"upper_bound": params['max_amount']})
             if award_amounts:
                 filters["award_amounts"] = award_amounts
+                logger.info(f"💰 Adding amount filter: min={params.get('min_amount')}, max={params.get('max_amount')}")
         
-        return {
+        request = {
             "filters": filters,
             "fields": self._get_award_fields(params.get('include_fpds_fields', False)),
             "page": 1,
@@ -279,6 +306,11 @@ class FPDSService:
             "sort": "Award Date",
             "order": "desc"
         }
+        
+        logger.info(f"📡 Built search request with {len(filters)} filter types")
+        logger.debug(f"Full request: {json.dumps(request, indent=2)}")
+        
+        return request
 
     def _get_award_fields(self, include_fpds_fields: bool = False) -> List[str]:
         """Get list of fields to request from API"""
@@ -309,6 +341,9 @@ class FPDSService:
             url = f"{self.base_url}/search/spending_by_award/"
             logger.info(f"📡 USASpending.gov API request: {url}")
             
+            # Log the request payload for debugging
+            logger.debug(f"Request payload: {json.dumps(search_request, indent=2)}")
+            
             response = self.session.post(url, json=search_request)
             logger.info(f"📊 API Response Status: {response.status_code}")
             
@@ -319,6 +354,8 @@ class FPDSService:
             data = response.json()
             results = data.get('results', [])
             
+            logger.info(f"📋 API returned {len(results)} results")
+            
             # Process results
             awards = []
             for item in results:
@@ -326,7 +363,7 @@ class FPDSService:
                 if award:
                     awards.append(award)
             
-            logger.info(f"✅ Successfully fetched {len(awards)} awards from USASpending.gov")
+            logger.info(f"✅ Successfully processed {len(awards)} awards from USASpending.gov")
             return awards
             
         except Exception as e:
