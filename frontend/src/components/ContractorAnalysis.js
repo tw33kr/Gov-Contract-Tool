@@ -1,104 +1,87 @@
-// ContractorAnalysis.js - Main contractor analysis component
-import React, { useState, useEffect } from 'react';
-import ContractorSearch from './ContractorSearch';
-import ContractorProfile from './ContractorProfile';
-import ContractorTimeline from './ContractorTimeline';
+// frontend/src/components/ContractorAnalysis.js
+import React from 'react';
 
-const ContractorAnalysis = () => {
-  const [selectedContractor, setSelectedContractor] = useState(null);
-  const [activeTab, setActiveTab] = useState('search');
-  const [contractorProfile, setContractorProfile] = useState(null);
-  const [loading, setLoading] = useState(false);
+const ContractorAnalysis = ({ contractors, loading }) => {
+  if (loading) {
+    return (
+      <div className="flex justify-center items-center h-64">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
+      </div>
+    );
+  }
 
-  const handleContractorSelect = async (contractor) => {
-    setSelectedContractor(contractor);
-    setActiveTab('profile');
-    setLoading(true);
-    
-    try {
-      // Fetch detailed contractor profile
-      const response = await fetch(`/api/contractors/${encodeURIComponent(contractor.name)}/profile`);
-      if (response.ok) {
-        const profile = await response.json();
-        setContractorProfile(profile);
-      }
-    } catch (error) {
-      console.error('Error fetching contractor profile:', error);
-    } finally {
-      setLoading(false);
+  if (!contractors || contractors.length === 0) {
+    return (
+      <div className="text-center py-8">
+        <p className="text-gray-500">No contractor data available.</p>
+      </div>
+    );
+  }
+
+  // Format currency
+  const formatCurrency = (amount) => {
+    if (amount >= 1000000000) {
+      return `$${(amount / 1000000000).toFixed(1)}B`;
+    } else if (amount >= 1000000) {
+      return `$${(amount / 1000000).toFixed(1)}M`;
+    } else if (amount >= 1000) {
+      return `$${(amount / 1000).toFixed(1)}K`;
     }
+    return `$${amount?.toLocaleString() || 0}`;
   };
 
   return (
-    <div className="max-w-7xl mx-auto p-6">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">🏢 Contractor Intelligence</h1>
-        <p className="text-gray-600">
-          Analyze federal contractors' active portfolios, recompete schedules, and market positioning
-        </p>
-      </div>
-
-      {/* Tab Navigation */}
-      <div className="border-b border-gray-200 mb-6">
-        <nav className="-mb-px flex space-x-8">
-          <button
-            onClick={() => setActiveTab('search')}
-            className={`py-2 px-1 border-b-2 font-medium text-sm ${
-              activeTab === 'search'
-                ? 'border-purple-500 text-purple-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-            }`}
-          >
-            🔍 Search Contractors
-          </button>
-          
-          {selectedContractor && (
-            <>
-              <button
-                onClick={() => setActiveTab('profile')}
-                className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                  activeTab === 'profile'
-                    ? 'border-purple-500 text-purple-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
-              >
-                📊 Profile Analysis
-              </button>
-              
-              <button
-                onClick={() => setActiveTab('timeline')}
-                className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                  activeTab === 'timeline'
-                    ? 'border-purple-500 text-purple-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
-              >
-                📅 Contract Timeline
-              </button>
-            </>
-          )}
-        </nav>
-      </div>
-
-      {/* Tab Content */}
-      {activeTab === 'search' && (
-        <ContractorSearch onContractorSelect={handleContractorSelect} />
-      )}
+    <div className="space-y-6">
+      <h2 className="text-2xl font-bold text-gray-900">Contractor Analysis</h2>
       
-      {activeTab === 'profile' && selectedContractor && (
-        <ContractorProfile 
-          contractor={selectedContractor}
-          profile={contractorProfile}
-          loading={loading}
-        />
-      )}
-      
-      {activeTab === 'timeline' && selectedContractor && contractorProfile && (
-        <ContractorTimeline 
-          contractor={selectedContractor}
-          profile={contractorProfile}
-        />
-      )}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {contractors.map((contractor, index) => (
+          <div key={index} className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
+            <div className="flex items-start justify-between">
+              <div className="flex-1">
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">
+                  {contractor.name}
+                </h3>
+                
+                <div className="space-y-2">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-500">Total Awards:</span>
+                    <span className="font-medium text-gray-900">{contractor.total_awards}</span>
+                  </div>
+                  
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-500">Total Value:</span>
+                    <span className="font-medium text-gray-900">{formatCurrency(contractor.total_value)}</span>
+                  </div>
+                  
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-500">Agencies:</span>
+                    <span className="font-medium text-gray-900">{contractor.agencies?.length || 0}</span>
+                  </div>
+                </div>
+                
+                {contractor.recent_awards && contractor.recent_awards.length > 0 && (
+                  <div className="mt-4">
+                    <h4 className="text-sm font-medium text-gray-700 mb-2">Recent Awards:</h4>
+                    <div className="space-y-1">
+                      {contractor.recent_awards.slice(0, 2).map((award, awardIndex) => (
+                        <div key={awardIndex} className="text-xs text-gray-600">
+                          <div className="truncate" title={award.title}>
+                            {award.title}
+                          </div>
+                          <div className="text-gray-500">
+                            {formatCurrency(award.amount)} • {award.agency}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 };
